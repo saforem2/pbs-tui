@@ -1,5 +1,11 @@
 # PBS Pro Textual TUI
 
+
+<center>
+<img width="48%" alt="ScreenShot-2025-09-16-172415@2x" src="https://github.com/user-attachments/assets/0947b9f3-3b55-42b9-8a6d-8e301492b7f7" /> <img width="48%" alt="ScreenShot-2025-09-16-172702@2x" src="https://github.com/user-attachments/assets/c3a5a8c4-3e28-4ec3-b4e4-91438f745ced" />
+</center>
+
+
 A terminal user interface built with [Textual](https://textual.textualize.io/) for monitoring
 [PBS Pro](https://altair.com/pbs-professional) schedulers at the
 [Argonne Leadership Computing Facility](https://alcf.anl.gov). The dashboard surfaces job,
