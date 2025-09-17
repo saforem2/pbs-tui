@@ -95,10 +95,11 @@ def job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
     parsing heuristics in :mod:`pbs_tui.nodes`.
     """
 
-    first_node = first_requested_node(job.nodes)
-
     if exec_nodes := extract_exec_host_nodes(job.exec_host):
-        return len(exec_nodes), exec_nodes[0]
+        first_exec = next((node for node in exec_nodes if not node.isdigit()), exec_nodes[0])
+        return len(exec_nodes), first_exec
+
+    first_node = first_requested_node(job.nodes)
 
     if (count := parse_node_count_spec(job.nodes)) is not None:
         return count, first_node
@@ -112,25 +113,26 @@ def job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
     return None, None
 
 
-def format_job_table_cells(job: Job, reference_time: datetime) -> list[Optional[str]]:
-    """Return ordered cell values for job table renderers."""
+def format_job_table_cells(job: Job, reference_time: datetime) -> dict[str, Optional[str]]:
+    """Return column-keyed cell values for job table renderers."""
 
     node_count, first_node = job_node_summary(job)
     runtime = _format_duration(job.runtime(reference_time))
-    cells = [
-        job.id,
-        job.name,
-        job.user,
-        job.queue,
-        JOB_STATE_LABELS.get(job.state, job.state),
-        job.nodes,
-        str(node_count) if node_count is not None else None,
-        first_node,
-        job.walltime,
-        runtime,
-    ]
-    assert len(cells) == len(JOB_TABLE_COLUMNS), "job table cell count must match column metadata"
-    return cells
+    raw_values: dict[str, Optional[str]] = {
+        "Job ID": job.id,
+        "Name": job.name,
+        "User": job.user,
+        "Queue": job.queue,
+        "State": JOB_STATE_LABELS.get(job.state, job.state),
+        "Nodes": job.nodes,
+        "Node Count": str(node_count) if node_count is not None else None,
+        "First Node": first_node,
+        "Walltime": job.walltime,
+        "Runtime": runtime,
+    }
+    ordered = {label: raw_values[label] for label, _ in JOB_TABLE_COLUMNS}
+    assert len(ordered) == len(JOB_TABLE_COLUMNS), "job table cells must match column metadata"
+    return ordered
 
 
 class SummaryWidget(Static):
@@ -300,10 +302,8 @@ class JobsTable(DataTable):
         self.clear()
         for job in _sort_jobs_for_display(jobs):
             cells = format_job_table_cells(job, reference_time)
-            self.add_row(
-                *(_table_cell(value) for value in cells),
-                key=job.id,
-            )
+            ordered = [cells[label] for label, _ in JOB_TABLE_COLUMNS]
+            self.add_row(*(_format_cell_value(value) for value in ordered), key=job.id)
 
 
 class NodesTable(DataTable):
@@ -499,17 +499,13 @@ def _escape_markdown_cell(text: str) -> str:
     return cleaned.strip()
 
 
-def _display_cell_value(value: Optional[str]) -> str:
+def _format_cell_value(value: Optional[str]) -> str:
     text = "-" if value is None else str(value)
     return text if text.strip() else "-"
 
 
 def _markdown_cell(value: Optional[str]) -> str:
-    return _escape_markdown_cell(_display_cell_value(value))
-
-
-def _table_cell(value: Optional[str]) -> str:
-    return _display_cell_value(value)
+    return _escape_markdown_cell(_format_cell_value(value))
 
 
 def snapshot_to_markdown(snapshot: SchedulerSnapshot) -> str:
@@ -534,7 +530,8 @@ def snapshot_to_markdown(snapshot: SchedulerSnapshot) -> str:
     if snapshot.jobs:
         for job in _sort_jobs_for_display(snapshot.jobs):
             row = format_job_table_cells(job, reference_time)
-            lines.append("| " + " | ".join(_markdown_cell(cell) for cell in row) + " |")
+            ordered = [row[label] for label, _ in JOB_TABLE_COLUMNS]
+            lines.append("| " + " | ".join(_markdown_cell(cell) for cell in ordered) + " |")
     else:
         empty_row = ["_No jobs available_"] + [""] * (len(headers) - 1)
         lines.append("| " + " | ".join(empty_row) + " |")
@@ -569,7 +566,8 @@ def snapshot_to_table(snapshot: SchedulerSnapshot) -> Table:
     if snapshot.jobs:
         for job in _sort_jobs_for_display(snapshot.jobs):
             row = format_job_table_cells(job, reference_time)
-            table.add_row(*(_table_cell(cell) for cell in row))
+            ordered = [row[label] for label, _ in JOB_TABLE_COLUMNS]
+            table.add_row(*(_format_cell_value(cell) for cell in ordered))
     else:
         table.add_row(
             "No jobs available",

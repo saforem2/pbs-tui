@@ -116,7 +116,7 @@ def _inline_output(monkeypatch, capsys, *job_overrides: dict) -> tuple[str, str]
 def test_format_job_table_cells_matches_columns():
     job = make_job()
     cells = format_job_table_cells(job, NOW)
-    assert len(cells) == len(JOB_TABLE_COLUMNS)
+    assert list(cells.keys()) == [label for label, _ in JOB_TABLE_COLUMNS]
 
 
 def test_run_inline_displays_sample_job_data(monkeypatch, capsys):
@@ -389,14 +389,8 @@ def test_snapshot_outputs_handle_malformed_resource_specs():
     console.print(table)
     rendered = console.export_text()
 
-    expected = {
-        "malformed_1": ("1", "-"),
-        "malformed_2": ("-", "-"),
-        "malformed_3": ("-", "-"),
-    }
-
-    for job in malformed_jobs:
-        count, first = expected[job.id]
-        _assert_snapshot_row(markdown, rendered, job.id, node_count=count, first_node=first)
+    _assert_snapshot_row(markdown, rendered, "malformed_1", node_count="1", first_node="-")
+    _assert_snapshot_row(markdown, rendered, "malformed_2", node_count="-", first_node="-")
+    _assert_snapshot_row(markdown, rendered, "malformed_3", node_count="-", first_node="-")
 
 
