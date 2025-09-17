@@ -516,18 +516,14 @@ def _escape_markdown_cell(text: str) -> str:
 
 
 def _markdown_cell(value: Optional[str]) -> str:
-    if value is None:
-        return "-"
-    text = str(value)
+    text = "-" if value is None else str(value)
     if not text.strip():
         return "-"
     return _escape_markdown_cell(text)
 
 
 def _table_cell(value: Optional[str]) -> str:
-    if value is None:
-        return "-"
-    text = str(value)
+    text = "-" if value is None else str(value)
     if not text.strip():
         return "-"
     return text

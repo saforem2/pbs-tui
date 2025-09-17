@@ -25,21 +25,51 @@ __all__ = [
 
 
 _NODE_COUNT_PATTERN = re.compile(r"^(\d+)")
-_NODE_CLEAN_PATTERN = re.compile(r"[\*/:]")
 _NODE_RANGE_PATTERN = re.compile(
     r"^(?P<prefix>[^\[\]]*)\[(?P<body>[^\]]+)\](?P<suffix>.*)$"
 )
 
 
 def split_node_spec(value: str) -> Iterable[str]:
-    for part in value.replace(",", "+").split("+"):
-        if segment := part.strip():
-            yield segment
+    """Yield top-level tokens from *value*, respecting bracketed ranges."""
+
+    current: list[str] = []
+    depth = 0
+    for char in value:
+        if char == "[":
+            depth += 1
+            current.append(char)
+            continue
+        if char == "]":
+            if depth > 0:
+                depth -= 1
+            current.append(char)
+            continue
+        if char in {"+", ","} and depth == 0:
+            segment = "".join(current).strip()
+            if segment:
+                yield segment
+            current.clear()
+            continue
+        current.append(char)
+    segment = "".join(current).strip()
+    if segment:
+        yield segment
+
+
+def _strip_qualifiers(token: str) -> str:
+    """Trim whitespace and drop suffixes introduced by ``*``, ``/`` or ``:``."""
+
+    candidate = token.strip()
+    for separator in ("*", "/", ":"):
+        if separator in candidate:
+            candidate = candidate.split(separator, 1)[0]
+    return candidate.strip()
 
 
 def _expand_node_ranges(base: str) -> Iterator[str]:
     match = _NODE_RANGE_PATTERN.match(base)
-    if not match:
+    if not match or "[" in match.group("body") or "]" in match.group("body"):
         if base:
             yield base
         return
@@ -61,9 +91,11 @@ def _expand_node_ranges(base: str) -> Iterator[str]:
                 start_int = int(start)
                 end_int = int(end)
                 step = 1 if end_int >= start_int else -1
-                for value in range(start_int, end_int + step, step):
-                    emitted = True
-                    yield f"{prefix}{value:0{width}d}{suffix}"
+                emitted = True
+                yield from (
+                    f"{prefix}{value:0{width}d}{suffix}"
+                    for value in range(start_int, end_int + step, step)
+                )
                 continue
         emitted = True
         yield f"{prefix}{piece}{suffix}"
@@ -72,7 +104,8 @@ def _expand_node_ranges(base: str) -> Iterator[str]:
 
 
 def normalize_node_tokens(token: str) -> Iterator[str]:
-    if base := _NODE_CLEAN_PATTERN.split(token.strip(), maxsplit=1)[0].strip():
+    base = _strip_qualifiers(token)
+    if base:
         yield from _expand_node_ranges(base)
 
 
@@ -96,8 +129,7 @@ def extract_nodes(spec: Optional[str], *, allow_numeric: bool) -> list[str]:
 
 
 def extract_exec_host_nodes(exec_host: Optional[str]) -> list[str]:
-    nodes = extract_nodes(exec_host, allow_numeric=True)
-    return sorted(nodes)
+    return extract_nodes(exec_host, allow_numeric=True)
 
 
 def extract_requested_nodes(nodes_spec: Optional[str]) -> list[str]:

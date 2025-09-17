@@ -105,6 +105,13 @@ def test_run_inline_prints_rich_table(monkeypatch, capsys):
             exec_host=None,
             nodes="!!!",
         ),
+        dict(
+            id="conflict.456",
+            name="conflict_job",
+            state="R",
+            exec_host="nodeX/0+nodeY/1",
+            nodes="nodeA+nodeB",
+        ),
     )
 
     class InlineFetcher:
@@ -159,6 +166,15 @@ def test_run_inline_prints_rich_table(monkeypatch, capsys):
     assert malformed_row["Node Count"] == "-"
     assert malformed_row["First Node"] == "-"
 
+    conflict_line = next(
+        (line for line in captured.out.splitlines() if "conflict_job" in line),
+        None,
+    )
+    assert conflict_line is not None, "Expected conflicting exec_host row in inline output"
+    conflict_row = _row_from_rich(conflict_line)
+    assert conflict_row["Node Count"] == "2"
+    assert conflict_row["First Node"] == "nodeX"
+
 
 def test_run_inline_writes_markdown_file(monkeypatch, tmp_path, capsys):
     now = datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc)
@@ -173,6 +189,12 @@ def test_run_inline_writes_markdown_file(monkeypatch, tmp_path, capsys):
             nodes="nodeA+nodeB",
         ),
         dict(id="numeric.456", name="numeric", nodes="2"),
+        dict(
+            id="bracket.789",
+            name="bracketed",
+            state="Q",
+            nodes="node[01-03]",
+        ),
     )
 
     class InlineFetcher:
@@ -224,6 +246,16 @@ def test_run_inline_writes_markdown_file(monkeypatch, tmp_path, capsys):
     assert numeric_row_cells["Node Count"] == "2"
     assert numeric_row_cells["First Node"] == "-"
 
+    bracket_row = next(
+        (line for line in contents.splitlines() if "| bracket.789 |" in line),
+        None,
+    )
+    assert bracket_row is not None, "Expected bracketed row in markdown output"
+    bracket_row_cells = _row_from_markdown(bracket_row)
+    assert bracket_row_cells["Nodes"] == "node[01-03]"
+    assert bracket_row_cells["Node Count"] == "3"
+    assert bracket_row_cells["First Node"] == "node01"
+
 
 def test_run_file_without_inline_exits(monkeypatch):
     class DummyFetcher:
@@ -239,7 +271,13 @@ def test_run_file_without_inline_exits(monkeypatch):
 
 def test_snapshot_outputs_handle_job_without_nodes():
     job = make_job(id="no_nodes", name="no_nodes", resources_requested={})
-    snapshot = SchedulerSnapshot(jobs=[job], source="test")
+    resource_job = make_job(
+        id="resource_only",
+        name="resource_only",
+        nodes=None,
+        resources_requested={"select": "2:ncpus=36"},
+    )
+    snapshot = SchedulerSnapshot(jobs=[job, resource_job], source="test")
 
     markdown = snapshot_to_markdown(snapshot)
     markdown_row = next(
@@ -260,5 +298,23 @@ def test_snapshot_outputs_handle_job_without_nodes():
     table_cells = _row_from_rich(table_row)
     assert table_cells["Node Count"] == "-"
     assert table_cells["First Node"] == "-"
+
+    resource_markdown_row = next(
+        (line for line in markdown.splitlines() if "| resource_only |" in line),
+        None,
+    )
+    assert resource_markdown_row is not None
+    resource_markdown_cells = _row_from_markdown(resource_markdown_row)
+    assert resource_markdown_cells["Node Count"] == "2"
+    assert resource_markdown_cells["First Node"] == "-"
+
+    resource_table_row = next(
+        (line for line in rendered.splitlines() if "resource_only" in line),
+        None,
+    )
+    assert resource_table_row is not None
+    resource_table_cells = _row_from_rich(resource_table_row)
+    assert resource_table_cells["Node Count"] == "2"
+    assert resource_table_cells["First Node"] == "-"
 
 
