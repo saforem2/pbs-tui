@@ -74,6 +74,15 @@ from .util import make_job
             {"nodes": "!!!", "resources_requested": {}},
             (None, None),
         ),
+        pytest.param(
+            "malformed_exec_host_valid_nodes",
+            {
+                "exec_host": "malformed!host!string",
+                "nodes": "nodeA+nodeB",
+                "resources_requested": {},
+            },
+            (2, "nodeA"),
+        ),
     ],
 )
 def test_job_node_summary_cases(description, overrides, expected):
@@ -107,6 +116,7 @@ def test_normalize_node_tokens(token, expected):
         ("2:ppn=4", 2),
         ("node01:ppn=4+node02", 2),
         ("++", None),
+        ("node01+!!!+node02", 2),
     ],
 )
 def test_parse_node_count_spec(spec, expected):

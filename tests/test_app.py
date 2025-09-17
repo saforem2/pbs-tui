@@ -6,18 +6,15 @@ import pytest
 
 from rich.console import Console
 
-from pbs_tui.app import (
-    JOB_TABLE_COLUMNS,
-    PBSTUI,
-    _env_flag,
-    run,
-    snapshot_to_markdown,
-    snapshot_to_table,
-)
+from pbs_tui.app import PBSTUI, _env_flag, run, snapshot_to_markdown, snapshot_to_table
 from pbs_tui.data import SchedulerSnapshot
 from pbs_tui.samples import sample_snapshot
+from pbs_tui.ui_config import JOB_TABLE_COLUMNS
 
 from .util import add_jobs, make_job
+
+
+NOW = datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc)
 
 
 COLUMN_NAMES = [name for name, _ in JOB_TABLE_COLUMNS]
@@ -92,40 +89,10 @@ def test_run_honours_environment(monkeypatch):
     assert captured["auto_pilot"] is not None
 
 
-def test_run_inline_prints_rich_table(monkeypatch, capsys):
-    now = datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc)
-    snapshot = sample_snapshot(now=now)
-    add_jobs(
-        snapshot,
-        dict(
-            id="multi.123",
-            name="multi",
-            state="R",
-            exec_host="nodeA/0+nodeB/1",
-            nodes="nodeA+nodeB",
-        ),
-        dict(
-            id="missing_nodes.456",
-            name="missing_nodes",
-            state="Q",
-            exec_host=None,
-            nodes=None,
-        ),
-        dict(
-            id="malformed_nodes.789",
-            name="malformed_nodes",
-            state="Q",
-            exec_host=None,
-            nodes="!!!",
-        ),
-        dict(
-            id="conflict.456",
-            name="conflict_job",
-            state="R",
-            exec_host="nodeX/0+nodeY/1",
-            nodes="nodeA+nodeB",
-        ),
-    )
+def _inline_output(monkeypatch, capsys, *job_overrides: dict) -> tuple[str, str]:
+    snapshot = sample_snapshot(now=NOW)
+    if job_overrides:
+        add_jobs(snapshot, *job_overrides)
 
     class InlineFetcher:
         async def fetch_snapshot(self):
@@ -136,53 +103,99 @@ def test_run_inline_prints_rich_table(monkeypatch, capsys):
 
     run(argv=["--inline"], fetcher=InlineFetcher())
     captured = capsys.readouterr()
-    assert "PBS Jobs as of" in captured.out
-    assert "Job ID" in captured.out
-    assert "Node Count" in captured.out
-    assert "climate_model" in captured.out
-    assert "sample data" in captured.err.lower()
+    return captured.out, captured.err
 
-    job_line = next(
-        (line for line in captured.out.splitlines() if "104829.aqua" in line),
-        None,
-    )
+
+def test_run_inline_displays_sample_job_data(monkeypatch, capsys):
+    out, err = _inline_output(monkeypatch, capsys)
+    assert "PBS Jobs as of" in out
+    assert "Job ID" in out
+    assert "Node Count" in out
+    assert "climate_model" in out
+    assert "sample data" in err.lower()
+
+    job_line = next((line for line in out.splitlines() if "104829.aqua" in line), None)
     assert job_line is not None, "Expected climate_model job row in inline output"
     row = _row_from_rich(job_line)
     assert row["Node Count"] == "1"
     assert row["First Node"] == "nid000001"
 
-    multi_line = next(
-        (line for line in captured.out.splitlines() if "multi.123" in line),
-        None,
+
+def test_run_inline_handles_multi_node_job(monkeypatch, capsys):
+    out, _ = _inline_output(
+        monkeypatch,
+        capsys,
+        dict(
+            id="multi.123",
+            name="multi",
+            state="R",
+            exec_host="nodeA/0+nodeB/1",
+            nodes="nodeA+nodeB",
+        ),
     )
+
+    multi_line = next((line for line in out.splitlines() if "multi.123" in line), None)
     assert multi_line is not None, "Expected multi-node job row in inline output"
     multi_row = _row_from_rich(multi_line)
     assert multi_row["Node Count"] == "2"
     assert multi_row["First Node"] == "nodeA"
 
-    missing_line = next(
-        (line for line in captured.out.splitlines() if "missing_no" in line),
-        None,
+
+def test_run_inline_shows_placeholders_for_missing_nodes(monkeypatch, capsys):
+    out, _ = _inline_output(
+        monkeypatch,
+        capsys,
+        dict(
+            id="missing_nodes.456",
+            name="missing_nodes",
+            state="Q",
+            exec_host=None,
+            nodes=None,
+        ),
     )
+
+    missing_line = next((line for line in out.splitlines() if "missing_no" in line), None)
     assert missing_line is not None, "Expected missing-nodes row in inline output"
     missing_row = _row_from_rich(missing_line)
     assert missing_row["Node Count"] == "-"
     assert missing_row["First Node"] == "-"
 
-    malformed_line = next(
-        (line for line in captured.out.splitlines() if "malformed_" in line),
-        None,
+
+def test_run_inline_handles_malformed_nodes(monkeypatch, capsys):
+    out, _ = _inline_output(
+        monkeypatch,
+        capsys,
+        dict(
+            id="malformed_nodes.789",
+            name="malformed_nodes",
+            state="Q",
+            exec_host=None,
+            nodes="!!!",
+        ),
     )
+
+    malformed_line = next((line for line in out.splitlines() if "malformed_" in line), None)
     assert malformed_line is not None, "Expected malformed-nodes row in inline output"
     malformed_row = _row_from_rich(malformed_line)
     assert malformed_row["Nodes"] == "!!!"
     assert malformed_row["Node Count"] == "-"
     assert malformed_row["First Node"] == "-"
 
-    conflict_line = next(
-        (line for line in captured.out.splitlines() if "conflict_job" in line),
-        None,
+
+def test_run_inline_prefers_exec_host_over_nodes(monkeypatch, capsys):
+    out, _ = _inline_output(
+        monkeypatch,
+        capsys,
+        dict(
+            id="conflict.456",
+            name="conflict_job",
+            state="R",
+            exec_host="nodeX/0+nodeY/1",
+            nodes="nodeA+nodeB",
+        ),
     )
+
+    conflict_line = next((line for line in out.splitlines() if "conflict_job" in line), None)
     assert conflict_line is not None, "Expected conflicting exec_host row in inline output"
     conflict_row = _row_from_rich(conflict_line)
     assert conflict_row["Node Count"] == "2"

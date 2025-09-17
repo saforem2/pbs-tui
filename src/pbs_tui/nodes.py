@@ -28,6 +28,7 @@ _NODE_RANGE_PATTERN = re.compile(
 )
 _SPLIT_TOP_LEVEL_PATTERN = re.compile(r"[+,](?![^\[]*\])")
 _QUALIFIER_PATTERN = re.compile(r"[\*/:]")
+_EXEC_HOST_TOKEN = re.compile(r"[A-Za-z0-9._-]+$")
 
 
 def split_node_spec(value: str) -> Iterable[str]:
@@ -104,7 +105,8 @@ def extract_nodes(spec: Optional[str], *, allow_numeric: bool) -> list[str]:
 
 
 def extract_exec_host_nodes(exec_host: Optional[str]) -> list[str]:
-    return extract_nodes(exec_host, allow_numeric=True)
+    nodes = extract_nodes(exec_host, allow_numeric=True)
+    return [node for node in nodes if _EXEC_HOST_TOKEN.fullmatch(node)]
 
 
 def extract_requested_nodes(nodes_spec: Optional[str]) -> list[str]:

@@ -30,6 +30,7 @@ from .nodes import (
     parse_node_count_spec,
     split_node_spec,
 )
+from .ui_config import JOB_TABLE_COLUMNS
 
 JOB_STATE_LABELS = {
     "B": "Begun",
@@ -43,18 +44,6 @@ JOB_STATE_LABELS = {
     "W": "Waiting",
 }
 
-JOB_TABLE_COLUMNS: list[tuple[str, str]] = [
-    ("Job ID", "left"),
-    ("Name", "left"),
-    ("User", "left"),
-    ("Queue", "left"),
-    ("State", "left"),
-    ("Nodes", "left"),
-    ("Node Count", "right"),
-    ("First Node", "left"),
-    ("Walltime", "left"),
-    ("Runtime", "left"),
-]
 
 
 def _sort_jobs_for_display(jobs: Iterable[Job]) -> list[Job]:
@@ -115,11 +104,7 @@ def _first_requested_node(spec: Optional[str]) -> Optional[str]:
         if any(char.isalpha() for char in candidate):
             return candidate
 
-    for part, candidate in candidates:
-        if "[" in part:
-            return candidate
-
-    return None
+    return next((candidate for part, candidate in candidates if "[" in part), None)
 
 
 def job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
@@ -533,18 +518,17 @@ def _escape_markdown_cell(text: str) -> str:
     return cleaned.strip()
 
 
-def _markdown_cell(value: Optional[str]) -> str:
+def _display_cell_value(value: Optional[str]) -> str:
     text = "-" if value is None else str(value)
-    if not text.strip():
-        return "-"
-    return _escape_markdown_cell(text)
+    return text if text.strip() else "-"
+
+
+def _markdown_cell(value: Optional[str]) -> str:
+    return _escape_markdown_cell(_display_cell_value(value))
 
 
 def _table_cell(value: Optional[str]) -> str:
-    text = "-" if value is None else str(value)
-    if not text.strip():
-        return "-"
-    return text
+    return _display_cell_value(value)
 
 
 def snapshot_to_markdown(snapshot: SchedulerSnapshot) -> str:
