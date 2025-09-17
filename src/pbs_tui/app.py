@@ -24,9 +24,9 @@ from textual.pilot import Pilot
 from .data import Job, Node, Queue, SchedulerSnapshot
 from .fetcher import PBSDataFetcher
 from .nodes import (
-    _extract_exec_host_nodes,
-    _extract_requested_nodes,
-    _parse_node_count_spec,
+    extract_exec_host_nodes,
+    extract_requested_nodes,
+    parse_node_count_spec,
 )
 
 JOB_STATE_LABELS = {
@@ -98,7 +98,7 @@ def _format_datetime(value: Optional[datetime]) -> str:
     return local_value.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
-def _job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
+def job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
     """Return a heuristic ``(node_count, first_node)`` tuple for *job*.
 
     The summary prefers concrete execution host assignments before falling back
@@ -107,13 +107,13 @@ def _job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
     parsing heuristics in :mod:`pbs_tui.nodes`.
     """
 
-    if exec_nodes := _extract_exec_host_nodes(job.exec_host):
+    if exec_nodes := extract_exec_host_nodes(job.exec_host):
         return len(exec_nodes), exec_nodes[0]
 
-    requested_nodes = _extract_requested_nodes(job.nodes)
+    requested_nodes = extract_requested_nodes(job.nodes)
     first_named_node = next((node for node in requested_nodes if not node.isdigit()), None)
 
-    if (requested_count := _parse_node_count_spec(job.nodes)) is not None:
+    if (requested_count := parse_node_count_spec(job.nodes)) is not None:
         return requested_count, first_named_node
 
     if requested_nodes:
@@ -125,7 +125,7 @@ def _job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
         job.resources_requested.get("nodect"),
     )
     for spec in fallback_specs:
-        if (count := _parse_node_count_spec(spec)) is not None:
+        if (count := parse_node_count_spec(spec)) is not None:
             return count, first_named_node
     return None, None
 
@@ -133,7 +133,7 @@ def _job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
 def _job_display_cells(job: Job, reference_time: datetime) -> list[Optional[str]]:
     """Return ordered cell values for job table renderers."""
 
-    node_count, first_node = _job_node_summary(job)
+    node_count, first_node = job_node_summary(job)
     runtime = _format_duration(job.runtime(reference_time))
     return [
         job.id,

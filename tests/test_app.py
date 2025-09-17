@@ -9,7 +9,7 @@ from rich.console import Console
 from pbs_tui.app import (
     PBSTUI,
     _env_flag,
-    _job_node_summary,
+    job_node_summary,
     run,
     snapshot_to_markdown,
     snapshot_to_table,
@@ -63,6 +63,15 @@ def test_run_honours_environment(monkeypatch):
 def test_run_inline_prints_rich_table(monkeypatch, capsys):
     now = datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc)
     snapshot = sample_snapshot(now=now)
+    snapshot.jobs.append(
+        make_job(
+            id="multi.123",
+            name="multi",
+            state="R",
+            exec_host="nodeA/0+nodeB/1",
+            nodes="nodeA+nodeB",
+        )
+    )
 
     class InlineFetcher:
         async def fetch_snapshot(self):
@@ -88,10 +97,32 @@ def test_run_inline_prints_rich_table(monkeypatch, capsys):
     assert cells[6] == "1"
     assert cells[7] == "nid000001"
 
+    multi_line = next(
+        (line for line in captured.out.splitlines() if "multi.123" in line),
+        None,
+    )
+    assert multi_line is not None, "Expected multi-node job row in inline output"
+    multi_cells = [
+        cell.strip()
+        for cell in re.split(r"\s{2,}", multi_line.strip())
+        if cell.strip()
+    ]
+    assert multi_cells[6] == "2"
+    assert multi_cells[7] == "nodeA"
+
 
 def test_run_inline_writes_markdown_file(monkeypatch, tmp_path, capsys):
     now = datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc)
     snapshot = sample_snapshot(now=now)
+    snapshot.jobs.append(
+        make_job(
+            id="multi.123",
+            name="multi",
+            state="R",
+            exec_host="nodeA/0+nodeB/1",
+            nodes="nodeA+nodeB",
+        )
+    )
 
     class InlineFetcher:
         async def fetch_snapshot(self):
@@ -122,6 +153,15 @@ def test_run_inline_writes_markdown_file(monkeypatch, tmp_path, capsys):
     cells = [cell.strip() for cell in job_row.strip().strip("|").split("|")]
     assert cells[6] == "1"
     assert cells[7] == "nid000001"
+
+    multi_row = next(
+        (line for line in contents.splitlines() if "| multi.123 |" in line),
+        None,
+    )
+    assert multi_row is not None, "Expected multi-node row in markdown output"
+    multi_cells = [cell.strip() for cell in multi_row.strip().strip("|").split("|")]
+    assert multi_cells[6] == "2"
+    assert multi_cells[7] == "nodeA"
 
 
 def test_run_file_without_inline_exits(monkeypatch):
@@ -238,8 +278,13 @@ def test_snapshot_outputs_handle_job_without_nodes():
             {"nodes": "", "resources_requested": {}},
             (None, None),
         ),
+        pytest.param(
+            "invalid_nodes",
+            {"nodes": "!!!", "resources_requested": {}},
+            (None, None),
+        ),
     ],
 )
 def test_job_node_summary_cases(description, overrides, expected):
     job = make_job(**overrides)
-    assert _job_node_summary(job) == expected
+    assert job_node_summary(job) == expected
