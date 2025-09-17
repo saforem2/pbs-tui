@@ -625,7 +625,11 @@ def run(
 
     if args.inline:
         snapshot = asyncio.run(fetcher_instance.fetch_snapshot())
-        console = Console()
+        stdout_is_tty = sys.stdout.isatty()
+        console = Console(
+            force_terminal=not stdout_is_tty,
+            color_system=None if not stdout_is_tty else None,
+        )
         console.print(snapshot_to_table(snapshot))
         if args.file:
             args.file.write_text(snapshot_to_markdown(snapshot) + "\n")
