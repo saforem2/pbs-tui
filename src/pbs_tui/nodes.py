@@ -118,8 +118,7 @@ def parse_node_count_spec(spec: Optional[str]) -> Optional[int]:
             for node in normalize_node_tokens(part)
             if node and any(char.isalnum() for char in node)
         ]:
-            non_numeric = [node for node in candidates if not node.isdigit()]
-            if non_numeric:
+            if non_numeric := [node for node in candidates if not node.isdigit()]:
                 found = True
                 total += len(non_numeric)
     return total if found else None

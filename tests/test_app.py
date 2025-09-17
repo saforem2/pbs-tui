@@ -72,6 +72,24 @@ def test_run_inline_prints_rich_table(monkeypatch, capsys):
             nodes="nodeA+nodeB",
         )
     )
+    snapshot.jobs.append(
+        make_job(
+            id="missing_nodes.456",
+            name="missing_nodes",
+            state="Q",
+            exec_host=None,
+            nodes=None,
+        )
+    )
+    snapshot.jobs.append(
+        make_job(
+            id="malformed_nodes.789",
+            name="malformed_nodes",
+            state="Q",
+            exec_host=None,
+            nodes="!!!",
+        )
+    )
 
     class InlineFetcher:
         async def fetch_snapshot(self):
@@ -110,6 +128,33 @@ def test_run_inline_prints_rich_table(monkeypatch, capsys):
     assert multi_cells[6] == "2"
     assert multi_cells[7] == "nodeA"
 
+    missing_line = next(
+        (line for line in captured.out.splitlines() if "missing_no" in line),
+        None,
+    )
+    assert missing_line is not None, "Expected missing-nodes row in inline output"
+    missing_cells = [
+        cell.strip()
+        for cell in re.split(r"\s{2,}", missing_line.strip())
+        if cell.strip()
+    ]
+    assert missing_cells[6] == "-"
+    assert missing_cells[7] == "-"
+
+    malformed_line = next(
+        (line for line in captured.out.splitlines() if "malformed_" in line),
+        None,
+    )
+    assert malformed_line is not None, "Expected malformed-nodes row in inline output"
+    malformed_cells = [
+        cell.strip()
+        for cell in re.split(r"\s{2,}", malformed_line.strip())
+        if cell.strip()
+    ]
+    assert malformed_cells[5] == "!!!"
+    assert malformed_cells[6] == "-"
+    assert malformed_cells[7] == "-"
+
 
 def test_run_inline_writes_markdown_file(monkeypatch, tmp_path, capsys):
     now = datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc)
@@ -121,6 +166,13 @@ def test_run_inline_writes_markdown_file(monkeypatch, tmp_path, capsys):
             state="R",
             exec_host="nodeA/0+nodeB/1",
             nodes="nodeA+nodeB",
+        )
+    )
+    snapshot.jobs.append(
+        make_job(
+            id="numeric.456",
+            name="numeric",
+            nodes="2",
         )
     )
 
@@ -162,6 +214,19 @@ def test_run_inline_writes_markdown_file(monkeypatch, tmp_path, capsys):
     multi_cells = [cell.strip() for cell in multi_row.strip().strip("|").split("|")]
     assert multi_cells[6] == "2"
     assert multi_cells[7] == "nodeA"
+
+    numeric_row = next(
+        (line for line in contents.splitlines() if "| numeric.456 |" in line),
+        None,
+    )
+    assert numeric_row is not None, "Expected numeric-only row in markdown output"
+    numeric_cells = [
+        cell.strip()
+        for cell in numeric_row.strip().strip("|").split("|")
+    ]
+    assert numeric_cells[5] == "2"
+    assert numeric_cells[6] == "2"
+    assert numeric_cells[7] == "-"
 
 
 def test_run_file_without_inline_exits(monkeypatch):
