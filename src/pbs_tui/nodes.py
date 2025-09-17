@@ -88,20 +88,19 @@ def normalize_node_tokens(token: str) -> Iterator[str]:
 def extract_nodes(spec: Optional[str], *, allow_numeric: bool) -> list[str]:
     if not spec:
         return []
-    seen: set[str] = set()
-    nodes: list[str] = []
-    for part in split_node_spec(spec):
-        for candidate in normalize_node_tokens(part):
-            if not candidate:
-                continue
-            if not any(char.isalnum() for char in candidate):
-                continue
-            if not allow_numeric and candidate.isdigit():
-                continue
-            if candidate not in seen:
-                seen.add(candidate)
-                nodes.append(candidate)
-    return nodes
+
+    candidates = (
+        node
+        for part in split_node_spec(spec)
+        for node in normalize_node_tokens(part)
+        if node and any(char.isalnum() for char in node)
+    )
+
+    filtered = (
+        node for node in candidates if allow_numeric or not node.isdigit()
+    )
+
+    return list(dict.fromkeys(filtered))
 
 
 def extract_exec_host_nodes(exec_host: Optional[str]) -> list[str]:
@@ -130,8 +129,7 @@ def parse_node_count_spec(spec: Optional[str]) -> Optional[int]:
         ]
         if not candidates:
             continue
-        non_numeric = [node for node in candidates if not node.isdigit()]
-        if non_numeric:
+        if non_numeric := [node for node in candidates if not node.isdigit()]:
             total += len(non_numeric)
         elif "[" in part:
             total += len(candidates)

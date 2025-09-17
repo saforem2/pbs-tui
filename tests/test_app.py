@@ -47,6 +47,23 @@ def _find_rich_row(rendered: str, job_id: str) -> dict[str, str]:
     return _row_from_rich(row)
 
 
+def _assert_snapshot_row(
+    markdown: str,
+    rendered: str,
+    job_id: str,
+    *,
+    node_count: str,
+    first_node: str,
+) -> None:
+    markdown_cells = _find_markdown_row(markdown, job_id)
+    assert markdown_cells["Node Count"] == node_count
+    assert markdown_cells["First Node"] == first_node
+
+    table_cells = _find_rich_row(rendered, job_id)
+    assert table_cells["Node Count"] == node_count
+    assert table_cells["First Node"] == first_node
+
+
 def test_env_flag_truthy(monkeypatch):
     monkeypatch.delenv("TEST_FLAG", raising=False)
     assert not _env_flag("TEST_FLAG")
@@ -276,24 +293,14 @@ def test_snapshot_outputs_handle_job_without_nodes():
     snapshot = SchedulerSnapshot(jobs=[job, resource_job], source="test")
 
     markdown = snapshot_to_markdown(snapshot)
-    markdown_cells = _find_markdown_row(markdown, "no_nodes")
-    assert markdown_cells["Node Count"] == "-"
-    assert markdown_cells["First Node"] == "-"
-
     table = snapshot_to_table(snapshot)
     console = Console(record=True, width=120)
     console.print(table)
     rendered = console.export_text()
-    table_cells = _find_rich_row(rendered, "no_nodes")
-    assert table_cells["Node Count"] == "-"
-    assert table_cells["First Node"] == "-"
 
-    resource_markdown_cells = _find_markdown_row(markdown, "resource_only")
-    assert resource_markdown_cells["Node Count"] == "2"
-    assert resource_markdown_cells["First Node"] == "-"
-
-    resource_table_cells = _find_rich_row(rendered, "resource_only")
-    assert resource_table_cells["Node Count"] == "2"
-    assert resource_table_cells["First Node"] == "-"
+    _assert_snapshot_row(markdown, rendered, "no_nodes", node_count="-", first_node="-")
+    _assert_snapshot_row(
+        markdown, rendered, "resource_only", node_count="2", first_node="-"
+    )
 
 
