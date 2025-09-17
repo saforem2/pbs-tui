@@ -1,13 +1,17 @@
 [build-system]
-requires = ["setuptools>=64", "wheel"]
+requires = ["setuptools>=64", "setuptools-scm", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pbs-tui"
-version = "0.1.0"
+# version = "0.1.0"
+dynamic = ["version"]
 description = "Textual TUI dashboard for monitoring PBS Pro schedulers"
 readme = "README.md"
-authors = [{name = "Argonne Leadership Computing Facility"}]
+authors = [
+  {name = "Sam Foreman", email = "foremans@anl.gov" },
+  {name = "Argonne Leadership Computing Facility"}
+]
 license = {text = "MIT"}
 requires-python = ">=3.10"
 dependencies = [
@@ -24,4 +28,4 @@ pbs-tui = "pbs_tui.app:run"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["pbs_tui"]
+include = ["pbs_tui", "pbs_tui/app.tcss"]
