@@ -8,7 +8,7 @@ import os
 import sys
 from collections import Counter
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional, Sequence
 
 from rich import box
@@ -81,11 +81,15 @@ def _format_duration(duration: Optional[timedelta]) -> str:
 def _format_datetime(value: Optional[datetime]) -> str:
     if value is None:
         return "-"
+
+    if value.tzinfo is None:
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+
     try:
-        local_value = value.astimezone()
+        normalized = value.astimezone(timezone.utc)
     except ValueError:
-        local_value = value
-    return local_value.strftime("%Y-%m-%d %H:%M:%S %Z")
+        normalized = value
+    return normalized.strftime("%Y-%m-%d %H:%M:%S %Z")
 def job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
     """Return a heuristic ``(node_count, first_node)`` tuple for *job*.
 
