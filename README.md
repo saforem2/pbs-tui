@@ -5,12 +5,17 @@
 <img width="48%" alt="ScreenShot-2025-09-16-172415@2x" src="https://github.com/user-attachments/assets/0947b9f3-3b55-42b9-8a6d-8e301492b7f7" /> <img width="48%" alt="ScreenShot-2025-09-16-172702@2x" src="https://github.com/user-attachments/assets/c3a5a8c4-3e28-4ec3-b4e4-91438f745ced" />
 </center>
 
-
 A terminal user interface built with [Textual](https://textual.textualize.io/) for monitoring
 [PBS Pro](https://altair.com/pbs-professional) schedulers at the
 [Argonne Leadership Computing Facility](https://alcf.anl.gov). The dashboard surfaces job,
 queue, and node activity in a single view and refreshes itself automatically so operators can
 track workload health in real time.
+
+- Try it out!
+
+  ```bash
+  uv run --with pbs-tui pbs-tui
+  ```
 
 ## Features
 
@@ -28,6 +33,11 @@ track workload health in real time.
 
 ## Installation
 
+```bash
+uv pip install pbs-tui
+```
+
+<!--
 1. Ensure Python 3.10 or newer is available.
 2. Install the project (and Textual) in your environment:
 
@@ -36,6 +46,7 @@ track workload health in real time.
    ```
 
    Development extras (formatting, etc.) can be installed with `pip install -e .[dev]`.
+-->
 
 ## Usage
 
