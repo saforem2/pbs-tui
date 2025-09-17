@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -78,6 +79,99 @@ def _format_datetime(value: Optional[datetime]) -> str:
     except ValueError:
         local_value = value
     return local_value.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+_NODE_COUNT_PATTERN = re.compile(r"^(\d+)")
+
+
+def _split_node_spec(value: str) -> Iterable[str]:
+    for part in value.replace(",", "+").split("+"):
+        segment = part.strip()
+        if segment:
+            yield segment
+
+
+def _extract_exec_host_nodes(exec_host: Optional[str]) -> list[str]:
+    if not exec_host:
+        return []
+    nodes: list[str] = []
+    seen: set[str] = set()
+    for raw_part in exec_host.split("+"):
+        part = raw_part.strip()
+        if not part:
+            continue
+        if "*" in part:
+            part = part.split("*", 1)[0]
+        if "/" in part:
+            part = part.split("/", 1)[0]
+        candidate = part.strip()
+        if not candidate:
+            continue
+        if candidate not in seen:
+            seen.add(candidate)
+            nodes.append(candidate)
+    return nodes
+
+
+def _extract_requested_nodes(nodes_spec: Optional[str]) -> list[str]:
+    if not nodes_spec:
+        return []
+    nodes: list[str] = []
+    seen: set[str] = set()
+    for part in _split_node_spec(nodes_spec):
+        candidate = part
+        if ":" in candidate:
+            candidate = candidate.split(":", 1)[0]
+        if "/" in candidate:
+            candidate = candidate.split("/", 1)[0]
+        candidate = candidate.strip()
+        if not candidate or candidate.isdigit():
+            continue
+        if candidate not in seen:
+            seen.add(candidate)
+            nodes.append(candidate)
+    return nodes
+
+
+def _parse_node_count_spec(spec: Optional[str]) -> Optional[int]:
+    if spec is None:
+        return None
+    spec = spec.strip()
+    if not spec:
+        return None
+    total = 0
+    found = False
+    for part in _split_node_spec(spec):
+        found = True
+        match = _NODE_COUNT_PATTERN.match(part)
+        if match:
+            total += int(match.group(1))
+        else:
+            total += 1
+    if not found:
+        return None
+    return total
+
+
+def _job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
+    nodes = _extract_exec_host_nodes(job.exec_host)
+    if not nodes:
+        nodes = _extract_requested_nodes(job.nodes)
+    first_node = nodes[0] if nodes else None
+    if nodes:
+        return len(nodes), first_node
+
+    candidates = [
+        job.resources_requested.get("nodect"),
+        job.resources_requested.get("select"),
+        job.resources_requested.get("nodes"),
+        job.nodes,
+    ]
+    for spec in candidates:
+        count = _parse_node_count_spec(spec)
+        if count is not None:
+            return count, first_node
+    return None, first_node
 
 
 class SummaryWidget(Static):
@@ -241,12 +335,24 @@ class JobsTable(DataTable):
         self.cursor_type = "row"
         self.zebra_stripes = True
         self.show_header = True
-        self.add_columns("Job ID", "Name", "User", "Queue", "State", "Nodes", "Walltime", "Runtime")
+        self.add_columns(
+            "Job ID",
+            "Name",
+            "User",
+            "Queue",
+            "State",
+            "Nodes",
+            "Node Count",
+            "First Node",
+            "Walltime",
+            "Runtime",
+        )
 
     def update_jobs(self, jobs: Iterable[Job], reference_time: datetime) -> None:
         self.clear()
         for job in _sort_jobs_for_display(jobs):
             runtime = _format_duration(job.runtime(reference_time))
+            node_count, first_node = _job_node_summary(job)
             self.add_row(
                 job.id,
                 job.name,
@@ -254,6 +360,8 @@ class JobsTable(DataTable):
                 job.queue,
                 JOB_STATE_LABELS.get(job.state, job.state),
                 job.nodes or "-",
+                str(node_count) if node_count is not None else "-",
+                first_node or "-",
                 job.walltime or "-",
                 runtime,
                 key=job.id,
@@ -486,13 +594,25 @@ def snapshot_to_markdown(snapshot: SchedulerSnapshot) -> str:
         f"*Source*: {snapshot.source}",
         "",
     ]
-    headers = ["Job ID", "Name", "User", "Queue", "State", "Nodes", "Walltime", "Runtime"]
+    headers = [
+        "Job ID",
+        "Name",
+        "User",
+        "Queue",
+        "State",
+        "Nodes",
+        "Node Count",
+        "First Node",
+        "Walltime",
+        "Runtime",
+    ]
     lines.append("| " + " | ".join(headers) + " |")
     lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
     reference_time = snapshot.timestamp or datetime.now()
     if snapshot.jobs:
         for job in _sort_jobs_for_display(snapshot.jobs):
             runtime = _format_duration(job.runtime(reference_time))
+            node_count, first_node = _job_node_summary(job)
             row = [
                 job.id,
                 job.name,
@@ -500,6 +620,8 @@ def snapshot_to_markdown(snapshot: SchedulerSnapshot) -> str:
                 job.queue,
                 JOB_STATE_LABELS.get(job.state, job.state),
                 job.nodes or "-",
+                str(node_count) if node_count is not None else "-",
+                first_node or "-",
                 job.walltime or "-",
                 runtime,
             ]
@@ -538,6 +660,8 @@ def snapshot_to_table(snapshot: SchedulerSnapshot) -> Table:
         ("Queue", "left"),
         ("State", "left"),
         ("Nodes", "left"),
+        ("Node Count", "right"),
+        ("First Node", "left"),
         ("Walltime", "left"),
         ("Runtime", "left"),
     ]
@@ -547,6 +671,7 @@ def snapshot_to_table(snapshot: SchedulerSnapshot) -> Table:
     reference_time = snapshot.timestamp or datetime.now()
     if snapshot.jobs:
         for job in _sort_jobs_for_display(snapshot.jobs):
+            node_count, first_node = _job_node_summary(job)
             table.add_row(
                 _table_cell(job.id),
                 _table_cell(job.name),
@@ -554,6 +679,8 @@ def snapshot_to_table(snapshot: SchedulerSnapshot) -> Table:
                 _table_cell(job.queue),
                 _table_cell(JOB_STATE_LABELS.get(job.state, job.state)),
                 _table_cell(job.nodes or "-"),
+                _table_cell(str(node_count) if node_count is not None else "-"),
+                _table_cell(first_node or "-"),
                 _table_cell(job.walltime or "-"),
                 _table_cell(_format_duration(job.runtime(reference_time))),
             )
