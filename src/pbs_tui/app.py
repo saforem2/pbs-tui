@@ -130,7 +130,7 @@ def job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
     return None, None
 
 
-def _job_display_cells(job: Job, reference_time: datetime) -> list[Optional[str]]:
+def format_job_table_cells(job: Job, reference_time: datetime) -> list[Optional[str]]:
     """Return ordered cell values for job table renderers."""
 
     node_count, first_node = job_node_summary(job)
@@ -315,7 +315,7 @@ class JobsTable(DataTable):
     def update_jobs(self, jobs: Iterable[Job], reference_time: datetime) -> None:
         self.clear()
         for job in _sort_jobs_for_display(jobs):
-            cells = _job_display_cells(job, reference_time)
+            cells = format_job_table_cells(job, reference_time)
             self.add_row(
                 *(_table_cell(value) for value in cells),
                 key=job.id,
@@ -554,7 +554,7 @@ def snapshot_to_markdown(snapshot: SchedulerSnapshot) -> str:
     reference_time = snapshot.timestamp or datetime.now()
     if snapshot.jobs:
         for job in _sort_jobs_for_display(snapshot.jobs):
-            row = _job_display_cells(job, reference_time)
+            row = format_job_table_cells(job, reference_time)
             lines.append("| " + " | ".join(_markdown_cell(cell) for cell in row) + " |")
     else:
         empty_row = ["_No jobs available_"] + [""] * (len(headers) - 1)
@@ -589,7 +589,7 @@ def snapshot_to_table(snapshot: SchedulerSnapshot) -> Table:
     reference_time = snapshot.timestamp or datetime.now()
     if snapshot.jobs:
         for job in _sort_jobs_for_display(snapshot.jobs):
-            row = _job_display_cells(job, reference_time)
+            row = format_job_table_cells(job, reference_time)
             table.add_row(*(_table_cell(cell) for cell in row))
     else:
         table.add_row(

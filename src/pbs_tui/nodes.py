@@ -37,13 +37,11 @@ def split_node_spec(value: str) -> Iterable[str]:
             yield segment
 
 
-def normalize_node_tokens(token: str) -> Iterator[str]:
-    base = _NODE_CLEAN_PATTERN.split(token.strip(), maxsplit=1)[0].strip()
-    if not base:
-        return
+def _expand_node_ranges(base: str) -> Iterator[str]:
     match = _NODE_RANGE_PATTERN.match(base)
     if not match:
-        yield base
+        if base:
+            yield base
         return
 
     prefix = match.group("prefix")
@@ -69,8 +67,15 @@ def normalize_node_tokens(token: str) -> Iterator[str]:
                 continue
         emitted = True
         yield f"{prefix}{piece}{suffix}"
-    if not emitted:
+    if not emitted and base:
         yield base
+
+
+def normalize_node_tokens(token: str) -> Iterator[str]:
+    base = _NODE_CLEAN_PATTERN.split(token.strip(), maxsplit=1)[0].strip()
+    if not base:
+        return
+    yield from _expand_node_ranges(base)
 
 
 def extract_nodes(spec: Optional[str], *, allow_numeric: bool) -> list[str]:
@@ -107,18 +112,13 @@ def parse_node_count_spec(spec: Optional[str]) -> Optional[int]:
     if not spec:
         return None
     total = 0
-    found = False
     for part in split_node_spec(spec):
         if match := _NODE_COUNT_PATTERN.match(part):
-            found = True
             total += int(match.group(1))
-            continue
-        if candidates := [
-            node
-            for node in normalize_node_tokens(part)
-            if node and any(char.isalnum() for char in node)
-        ]:
-            if non_numeric := [node for node in candidates if not node.isdigit()]:
-                found = True
-                total += len(non_numeric)
-    return total if found else None
+        else:
+            total += sum(
+                1
+                for node in normalize_node_tokens(part)
+                if node and any(char.isalnum() for char in node) and not node.isdigit()
+            )
+    return total or None
