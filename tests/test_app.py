@@ -14,26 +14,10 @@ from pbs_tui.app import (
     snapshot_to_markdown,
     snapshot_to_table,
 )
-from pbs_tui.data import Job, SchedulerSnapshot
+from pbs_tui.data import SchedulerSnapshot
 from pbs_tui.samples import sample_snapshot
 
-
-def make_job(**overrides):
-    defaults = dict(
-        id="job",
-        name="demo",
-        user="alice",
-        queue="work",
-        state="Q",
-        exec_host=None,
-        nodes=None,
-        resources_requested={},
-    )
-    return Job(**(defaults | overrides))
-
-
-def add_jobs(snapshot: SchedulerSnapshot, *job_overrides: dict) -> None:
-    snapshot.jobs.extend(make_job(**overrides) for overrides in job_overrides)
+from .util import add_jobs, make_job
 
 
 COLUMN_NAMES = [name for name, _ in JOB_TABLE_COLUMNS]
@@ -49,6 +33,18 @@ def _row_from_markdown(line: str) -> dict[str, str]:
     cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
     assert len(cells) == len(COLUMN_NAMES), f"Unexpected cell count in markdown row: {line}"
     return dict(zip(COLUMN_NAMES, cells))
+
+
+def _find_markdown_row(markdown: str, job_id: str) -> dict[str, str]:
+    row = next((line for line in markdown.splitlines() if f"| {job_id} |" in line), None)
+    assert row is not None, f"Expected markdown row for job {job_id}"
+    return _row_from_markdown(row)
+
+
+def _find_rich_row(rendered: str, job_id: str) -> dict[str, str]:
+    row = next((line for line in rendered.splitlines() if job_id in line), None)
+    assert row is not None, f"Expected rich row for job {job_id}"
+    return _row_from_rich(row)
 
 
 def test_env_flag_truthy(monkeypatch):
@@ -280,12 +276,7 @@ def test_snapshot_outputs_handle_job_without_nodes():
     snapshot = SchedulerSnapshot(jobs=[job, resource_job], source="test")
 
     markdown = snapshot_to_markdown(snapshot)
-    markdown_row = next(
-        (line for line in markdown.splitlines() if "| no_nodes |" in line),
-        None,
-    )
-    assert markdown_row is not None
-    markdown_cells = _row_from_markdown(markdown_row)
+    markdown_cells = _find_markdown_row(markdown, "no_nodes")
     assert markdown_cells["Node Count"] == "-"
     assert markdown_cells["First Node"] == "-"
 
@@ -293,27 +284,15 @@ def test_snapshot_outputs_handle_job_without_nodes():
     console = Console(record=True, width=120)
     console.print(table)
     rendered = console.export_text()
-    table_row = next((line for line in rendered.splitlines() if "no_nodes" in line), None)
-    assert table_row is not None
-    table_cells = _row_from_rich(table_row)
+    table_cells = _find_rich_row(rendered, "no_nodes")
     assert table_cells["Node Count"] == "-"
     assert table_cells["First Node"] == "-"
 
-    resource_markdown_row = next(
-        (line for line in markdown.splitlines() if "| resource_only |" in line),
-        None,
-    )
-    assert resource_markdown_row is not None
-    resource_markdown_cells = _row_from_markdown(resource_markdown_row)
+    resource_markdown_cells = _find_markdown_row(markdown, "resource_only")
     assert resource_markdown_cells["Node Count"] == "2"
     assert resource_markdown_cells["First Node"] == "-"
 
-    resource_table_row = next(
-        (line for line in rendered.splitlines() if "resource_only" in line),
-        None,
-    )
-    assert resource_table_row is not None
-    resource_table_cells = _row_from_rich(resource_table_row)
+    resource_table_cells = _find_rich_row(rendered, "resource_only")
     assert resource_table_cells["Node Count"] == "2"
     assert resource_table_cells["First Node"] == "-"
 

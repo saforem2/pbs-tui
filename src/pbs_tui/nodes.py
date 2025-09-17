@@ -22,49 +22,26 @@ __all__ = [
     "extract_requested_nodes",
     "parse_node_count_spec",
 ]
-
-
 _NODE_COUNT_PATTERN = re.compile(r"^(\d+)")
 _NODE_RANGE_PATTERN = re.compile(
     r"^(?P<prefix>[^\[\]]*)\[(?P<body>[^\]]+)\](?P<suffix>.*)$"
 )
+_SPLIT_TOP_LEVEL_PATTERN = re.compile(r"[+,](?![^\[]*\])")
+_QUALIFIER_PATTERN = re.compile(r"[\*/:]")
 
 
 def split_node_spec(value: str) -> Iterable[str]:
     """Yield top-level tokens from *value*, respecting bracketed ranges."""
 
-    current: list[str] = []
-    depth = 0
-    for char in value:
-        if char == "[":
-            depth += 1
-            current.append(char)
-            continue
-        if char == "]":
-            if depth > 0:
-                depth -= 1
-            current.append(char)
-            continue
-        if char in {"+", ","} and depth == 0:
-            segment = "".join(current).strip()
-            if segment:
-                yield segment
-            current.clear()
-            continue
-        current.append(char)
-    segment = "".join(current).strip()
-    if segment:
-        yield segment
+    for token in _SPLIT_TOP_LEVEL_PATTERN.split(value.replace("+", ",")):
+        if segment := token.strip():
+            yield segment
 
 
 def _strip_qualifiers(token: str) -> str:
     """Trim whitespace and drop suffixes introduced by ``*``, ``/`` or ``:``."""
 
-    candidate = token.strip()
-    for separator in ("*", "/", ":"):
-        if separator in candidate:
-            candidate = candidate.split(separator, 1)[0]
-    return candidate.strip()
+    return _QUALIFIER_PATTERN.split(token.strip(), maxsplit=1)[0].strip()
 
 
 def _expand_node_ranges(base: str) -> Iterator[str]:
@@ -104,8 +81,7 @@ def _expand_node_ranges(base: str) -> Iterator[str]:
 
 
 def normalize_node_tokens(token: str) -> Iterator[str]:
-    base = _strip_qualifiers(token)
-    if base:
+    if base := _strip_qualifiers(token):
         yield from _expand_node_ranges(base)
 
 
@@ -142,17 +118,21 @@ def parse_node_count_spec(spec: Optional[str]) -> Optional[int]:
     spec = spec.strip()
     if not spec:
         return None
-    total = sum(
-        int(match.group(1))
-        if (match := _NODE_COUNT_PATTERN.match(part))
-        else sum(
-            bool(
-                node
-                and any(char.isalnum() for char in node)
-                and not node.isdigit()
-            )
+    total = 0
+    for part in split_node_spec(spec):
+        if match := _NODE_COUNT_PATTERN.match(part):
+            total += int(match.group(1))
+            continue
+        candidates = [
+            node
             for node in normalize_node_tokens(part)
-        )
-        for part in split_node_spec(spec)
-    )
+            if node and any(char.isalnum() for char in node)
+        ]
+        if not candidates:
+            continue
+        non_numeric = [node for node in candidates if not node.isdigit()]
+        if non_numeric:
+            total += len(non_numeric)
+        elif "[" in part:
+            total += len(candidates)
     return total or None

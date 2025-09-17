@@ -26,7 +26,9 @@ from .fetcher import PBSDataFetcher
 from .nodes import (
     extract_exec_host_nodes,
     extract_requested_nodes,
+    normalize_node_tokens,
     parse_node_count_spec,
+    split_node_spec,
 )
 
 JOB_STATE_LABELS = {
@@ -98,6 +100,22 @@ def _format_datetime(value: Optional[datetime]) -> str:
     return local_value.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
+def _first_requested_node(spec: Optional[str]) -> Optional[str]:
+    if not spec:
+        return None
+
+    for part in split_node_spec(spec):
+        candidates = [node for node in normalize_node_tokens(part) if node]
+        for candidate in candidates:
+            if any(char.isalpha() for char in candidate):
+                return candidate
+        if "[" in part:
+            for candidate in candidates:
+                if candidate:
+                    return candidate
+    return None
+
+
 def job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
     """Return a heuristic ``(node_count, first_node)`` tuple for *job*.
 
@@ -111,13 +129,13 @@ def job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
         return len(exec_nodes), exec_nodes[0]
 
     requested_nodes = extract_requested_nodes(job.nodes)
-    first_named_node = next((node for node in requested_nodes if not node.isdigit()), None)
+    first_node = _first_requested_node(job.nodes)
 
     if (requested_count := parse_node_count_spec(job.nodes)) is not None:
-        return requested_count, first_named_node
+        return requested_count, first_node
 
     if requested_nodes:
-        return len(requested_nodes), first_named_node
+        return len(requested_nodes), first_node
 
     fallback_specs = (
         job.resources_requested.get("select"),
@@ -126,7 +144,7 @@ def job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
     )
     for spec in fallback_specs:
         if (count := parse_node_count_spec(spec)) is not None:
-            return count, first_named_node
+            return count, first_node
     return None, None
 
 
