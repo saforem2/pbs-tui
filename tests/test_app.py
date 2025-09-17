@@ -1,9 +1,20 @@
 from datetime import datetime, timezone
 
+import re
+
 import pytest
 
-from pbs_tui.app import PBSTUI, _env_flag, run, _job_node_summary
-from pbs_tui.data import Job
+from rich.console import Console
+
+from pbs_tui.app import (
+    PBSTUI,
+    _env_flag,
+    _job_node_summary,
+    run,
+    snapshot_to_markdown,
+    snapshot_to_table,
+)
+from pbs_tui.data import Job, SchedulerSnapshot
 from pbs_tui.samples import sample_snapshot
 
 
@@ -68,6 +79,15 @@ def test_run_inline_prints_rich_table(monkeypatch, capsys):
     assert "climate_model" in captured.out
     assert "sample data" in captured.err.lower()
 
+    job_line = next(
+        (line for line in captured.out.splitlines() if "104829.aqua" in line),
+        None,
+    )
+    assert job_line is not None, "Expected climate_model job row in inline output"
+    cells = [cell.strip() for cell in re.split(r"\s{2,}", job_line.strip()) if cell.strip()]
+    assert cells[6] == "1"
+    assert cells[7] == "nid000001"
+
 
 def test_run_inline_writes_markdown_file(monkeypatch, tmp_path, capsys):
     now = datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc)
@@ -94,6 +114,15 @@ def test_run_inline_writes_markdown_file(monkeypatch, tmp_path, capsys):
     assert "PBS Jobs as of" in captured.out
     assert "sample data" in captured.err.lower()
 
+    job_row = next(
+        (line for line in contents.splitlines() if "| 104829.aqua |" in line),
+        None,
+    )
+    assert job_row is not None, "Expected climate_model row in markdown output"
+    cells = [cell.strip() for cell in job_row.strip().strip("|").split("|")]
+    assert cells[6] == "1"
+    assert cells[7] == "nid000001"
+
 
 def test_run_file_without_inline_exits(monkeypatch):
     class DummyFetcher:
@@ -107,103 +136,110 @@ def test_run_file_without_inline_exits(monkeypatch):
         run(argv=["--file", "out.md"], fetcher=DummyFetcher())
 
 
-def test_job_node_summary_exec_host():
-    job = make_job(
-        state="R",
-        exec_host="nodeA/0+nodeA/1+nodeB/0*2",
-        nodes="2:ppn=1",
+def test_snapshot_outputs_handle_job_without_nodes():
+    job = make_job(id="no_nodes", name="no_nodes", resources_requested={})
+    snapshot = SchedulerSnapshot(jobs=[job], source="test")
+
+    markdown = snapshot_to_markdown(snapshot)
+    markdown_row = next(
+        (line for line in markdown.splitlines() if "| no_nodes |" in line),
+        None,
     )
-    count, first = _job_node_summary(job)
-    assert count == 2
-    assert first == "nodeA"
+    assert markdown_row is not None
+    markdown_cells = [cell.strip() for cell in markdown_row.strip().strip("|").split("|")]
+    assert markdown_cells[6] == "-"
+    assert markdown_cells[7] == "-"
+
+    table = snapshot_to_table(snapshot)
+    console = Console(record=True, width=120)
+    console.print(table)
+    rendered = console.export_text()
+    table_row = next((line for line in rendered.splitlines() if "no_nodes" in line), None)
+    assert table_row is not None
+    table_cells = [cell.strip() for cell in re.split(r"\s{2,}", table_row.strip()) if cell.strip()]
+    assert table_cells[6] == "-"
+    assert table_cells[7] == "-"
 
 
-def test_job_node_summary_exec_host_empty():
-    job = make_job(exec_host="", nodes="node01+node02")
-    count, first = _job_node_summary(job)
-    assert count == 2
-    assert first == "node01"
-
-
-def test_job_node_summary_exec_host_duplicates():
-    job = make_job(state="R", exec_host="nodeC/0+nodeC/0+nodeC/1")
-    count, first = _job_node_summary(job)
-    assert count == 1
-    assert first == "nodeC"
-
-
-def test_job_node_summary_exec_host_malformed_parts():
-    job = make_job(state="R", exec_host="nodeD/0++nodeE/1*+  +/junk")
-    count, first = _job_node_summary(job)
-    assert count == 2
-    assert first == "nodeD"
-
-
-def test_job_node_summary_requested_nodes():
-    job = make_job(nodes="node01+node02:ppn=2")
-    count, first = _job_node_summary(job)
-    assert count == 2
-    assert first == "node01"
-
-
-def test_job_node_summary_requested_nodes_numeric_only():
-    job = make_job(nodes="2")
-    count, first = _job_node_summary(job)
-    assert count == 2
-    assert first is None
-
-
-def test_job_node_summary_requested_nodes_delimiter_only():
-    job = make_job(nodes="++")
-    count, first = _job_node_summary(job)
-    assert count is None
-    assert first is None
-
-
-def test_job_node_summary_requested_nodes_mixed_numeric_named():
-    job = make_job(nodes="2+nodeX")
-    count, first = _job_node_summary(job)
-    assert count == 3
-    assert first == "nodeX"
-
-
-def test_job_node_summary_requested_nodes_range_expression():
-    job = make_job(nodes="node[01-03]")
-    count, first = _job_node_summary(job)
-    assert count == 3
-    assert first == "node01"
-
-
-def test_job_node_summary_numeric_fallback():
-    job = make_job(nodes="3:ppn=64", resources_requested={"nodes": "3:ppn=64"})
-    count, first = _job_node_summary(job)
-    assert count == 3
-    assert first is None
-
-
-def test_job_node_summary_nodect_fallback():
-    job = make_job(resources_requested={"nodect": "5"})
-    count, first = _job_node_summary(job)
-    assert count == 5
-    assert first is None
-
-
-def test_job_node_summary_multiple_fallback_candidates():
-    job = make_job(resources_requested={"select": "2:ncpus=36", "nodect": "5"})
-    count, first = _job_node_summary(job)
-    assert count == 2
-    assert first is None
-
-
-def test_job_node_summary_missing_nodes():
-    job = make_job()
-    count, first = _job_node_summary(job)
-    assert count is None
-    assert first is None
-
-
-def test_job_node_summary_blank_nodes():
-    job = make_job(nodes="", resources_requested={})
-    count, first = _job_node_summary(job)
-    assert count is None
-    assert first is None
+@pytest.mark.parametrize(
+    "description, overrides, expected",
+    [
+        pytest.param(
+            "exec_host_multiple",
+            {
+                "state": "R",
+                "exec_host": "nodeA/0+nodeA/1+nodeB/0*2",
+                "nodes": "2:ppn=1",
+            },
+            (2, "nodeA"),
+        ),
+        pytest.param(
+            "exec_host_empty",
+            {"exec_host": "", "nodes": "node01+node02"},
+            (2, "node01"),
+        ),
+        pytest.param(
+            "exec_host_duplicates",
+            {"state": "R", "exec_host": "nodeC/0+nodeC/0+nodeC/1"},
+            (1, "nodeC"),
+        ),
+        pytest.param(
+            "exec_host_malformed",
+            {"state": "R", "exec_host": "nodeD/0++nodeE/1*+  +/junk"},
+            (2, "nodeD"),
+        ),
+        pytest.param(
+            "requested_named",
+            {"nodes": "node01+node02:ppn=2"},
+            (2, "node01"),
+        ),
+        pytest.param(
+            "requested_numeric_only",
+            {"nodes": "2"},
+            (2, None),
+        ),
+        pytest.param(
+            "requested_delimiters_only",
+            {"nodes": "++"},
+            (None, None),
+        ),
+        pytest.param(
+            "requested_mixed",
+            {"nodes": "2+nodeX"},
+            (3, "nodeX"),
+        ),
+        pytest.param(
+            "requested_range",
+            {"nodes": "node[01-03]"},
+            (3, "node01"),
+        ),
+        pytest.param(
+            "fallback_nodes_resource",
+            {"nodes": "3:ppn=64", "resources_requested": {"nodes": "3:ppn=64"}},
+            (3, None),
+        ),
+        pytest.param(
+            "fallback_select_over_nodect",
+            {"resources_requested": {"select": "2:ncpus=36", "nodect": "5"}},
+            (2, None),
+        ),
+        pytest.param(
+            "fallback_nodect",
+            {"resources_requested": {"nodect": "5"}},
+            (5, None),
+        ),
+        pytest.param(
+            "missing_nodes",
+            {},
+            (None, None),
+        ),
+        pytest.param(
+            "blank_nodes",
+            {"nodes": "", "resources_requested": {}},
+            (None, None),
+        ),
+    ],
+)
+def test_job_node_summary_cases(description, overrides, expected):
+    job = make_job(**overrides)
+    assert _job_node_summary(job) == expected

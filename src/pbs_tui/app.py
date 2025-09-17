@@ -41,6 +41,19 @@ JOB_STATE_LABELS = {
     "W": "Waiting",
 }
 
+JOB_TABLE_COLUMNS: list[tuple[str, str]] = [
+    ("Job ID", "left"),
+    ("Name", "left"),
+    ("User", "left"),
+    ("Queue", "left"),
+    ("State", "left"),
+    ("Nodes", "left"),
+    ("Node Count", "right"),
+    ("First Node", "left"),
+    ("Walltime", "left"),
+    ("Runtime", "left"),
+]
+
 
 def _sort_jobs_for_display(jobs: Iterable[Job]) -> list[Job]:
     return sorted(
@@ -108,9 +121,8 @@ def _job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
 
     fallback_specs = (
         job.resources_requested.get("select"),
-        job.resources_requested.get("nodect"),
         job.resources_requested.get("nodes"),
-        job.nodes,
+        job.resources_requested.get("nodect"),
     )
     for spec in fallback_specs:
         if (count := _parse_node_count_spec(spec)) is not None:
@@ -298,18 +310,7 @@ class JobsTable(DataTable):
         self.cursor_type = "row"
         self.zebra_stripes = True
         self.show_header = True
-        self.add_columns(
-            "Job ID",
-            "Name",
-            "User",
-            "Queue",
-            "State",
-            "Nodes",
-            "Node Count",
-            "First Node",
-            "Walltime",
-            "Runtime",
-        )
+        self.add_columns(*(label for label, _ in JOB_TABLE_COLUMNS))
 
     def update_jobs(self, jobs: Iterable[Job], reference_time: datetime) -> None:
         self.clear()
@@ -547,18 +548,7 @@ def snapshot_to_markdown(snapshot: SchedulerSnapshot) -> str:
         f"*Source*: {snapshot.source}",
         "",
     ]
-    headers = [
-        "Job ID",
-        "Name",
-        "User",
-        "Queue",
-        "State",
-        "Nodes",
-        "Node Count",
-        "First Node",
-        "Walltime",
-        "Runtime",
-    ]
+    headers = [label for label, _ in JOB_TABLE_COLUMNS]
     lines.append("| " + " | ".join(headers) + " |")
     lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
     reference_time = snapshot.timestamp or datetime.now()
@@ -593,19 +583,7 @@ def snapshot_to_table(snapshot: SchedulerSnapshot) -> Table:
         box=box.SIMPLE_HEAVY,
         highlight=True,
     )
-    headers = [
-        ("Job ID", "left"),
-        ("Name", "left"),
-        ("User", "left"),
-        ("Queue", "left"),
-        ("State", "left"),
-        ("Nodes", "left"),
-        ("Node Count", "right"),
-        ("First Node", "left"),
-        ("Walltime", "left"),
-        ("Runtime", "left"),
-    ]
-    for header, justify in headers:
+    for header, justify in JOB_TABLE_COLUMNS:
         table.add_column(header, justify=justify)
 
     reference_time = snapshot.timestamp or datetime.now()
@@ -616,7 +594,7 @@ def snapshot_to_table(snapshot: SchedulerSnapshot) -> Table:
     else:
         table.add_row(
             "No jobs available",
-            *[""] * (len(headers) - 1),
+            *[""] * (len(JOB_TABLE_COLUMNS) - 1),
             style="italic",
         )
     return table
