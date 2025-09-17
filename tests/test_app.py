@@ -7,6 +7,21 @@ from pbs_tui.data import Job
 from pbs_tui.samples import sample_snapshot
 
 
+def make_job(**overrides):
+    defaults = dict(
+        id="job",
+        name="demo",
+        user="alice",
+        queue="work",
+        state="Q",
+        exec_host=None,
+        nodes=None,
+        resources_requested={},
+    )
+    defaults.update(overrides)
+    return Job(**defaults)
+
+
 def test_env_flag_truthy(monkeypatch):
     monkeypatch.delenv("TEST_FLAG", raising=False)
     assert not _env_flag("TEST_FLAG")
@@ -94,11 +109,7 @@ def test_run_file_without_inline_exits(monkeypatch):
 
 
 def test_job_node_summary_exec_host():
-    job = Job(
-        id="1",
-        name="demo",
-        user="alice",
-        queue="work",
+    job = make_job(
         state="R",
         exec_host="nodeA/0+nodeA/1+nodeB/0*2",
         nodes="2:ppn=1",
@@ -108,44 +119,92 @@ def test_job_node_summary_exec_host():
     assert first == "nodeA"
 
 
-def test_job_node_summary_requested_nodes():
-    job = Job(
-        id="2",
-        name="demo",
-        user="bob",
-        queue="work",
-        state="Q",
-        nodes="node01+node02:ppn=2",
-    )
+def test_job_node_summary_exec_host_empty():
+    job = make_job(exec_host="", nodes="node01+node02")
     count, first = _job_node_summary(job)
     assert count == 2
     assert first == "node01"
 
 
+def test_job_node_summary_exec_host_duplicates():
+    job = make_job(state="R", exec_host="nodeC/0+nodeC/0+nodeC/1")
+    count, first = _job_node_summary(job)
+    assert count == 1
+    assert first == "nodeC"
+
+
+def test_job_node_summary_exec_host_malformed_parts():
+    job = make_job(state="R", exec_host="nodeD/0++nodeE/1*+  +/junk")
+    count, first = _job_node_summary(job)
+    assert count == 2
+    assert first == "nodeD"
+
+
+def test_job_node_summary_requested_nodes():
+    job = make_job(nodes="node01+node02:ppn=2")
+    count, first = _job_node_summary(job)
+    assert count == 2
+    assert first == "node01"
+
+
+def test_job_node_summary_requested_nodes_numeric_only():
+    job = make_job(nodes="2")
+    count, first = _job_node_summary(job)
+    assert count == 2
+    assert first is None
+
+
+def test_job_node_summary_requested_nodes_delimiter_only():
+    job = make_job(nodes="++")
+    count, first = _job_node_summary(job)
+    assert count is None
+    assert first is None
+
+
+def test_job_node_summary_requested_nodes_mixed_numeric_named():
+    job = make_job(nodes="2+nodeX")
+    count, first = _job_node_summary(job)
+    assert count == 3
+    assert first == "nodeX"
+
+
+def test_job_node_summary_requested_nodes_range_expression():
+    job = make_job(nodes="node[01-03]")
+    count, first = _job_node_summary(job)
+    assert count == 3
+    assert first == "node01"
+
+
 def test_job_node_summary_numeric_fallback():
-    job = Job(
-        id="3",
-        name="demo",
-        user="carol",
-        queue="work",
-        state="Q",
-        nodes="3:ppn=64",
-        resources_requested={"nodes": "3:ppn=64"},
-    )
+    job = make_job(nodes="3:ppn=64", resources_requested={"nodes": "3:ppn=64"})
     count, first = _job_node_summary(job)
     assert count == 3
     assert first is None
 
 
 def test_job_node_summary_nodect_fallback():
-    job = Job(
-        id="4",
-        name="demo",
-        user="dave",
-        queue="work",
-        state="Q",
-        resources_requested={"nodect": "5"},
-    )
+    job = make_job(resources_requested={"nodect": "5"})
     count, first = _job_node_summary(job)
     assert count == 5
+    assert first is None
+
+
+def test_job_node_summary_multiple_fallback_candidates():
+    job = make_job(resources_requested={"select": "2:ncpus=36", "nodect": "5"})
+    count, first = _job_node_summary(job)
+    assert count == 2
+    assert first is None
+
+
+def test_job_node_summary_missing_nodes():
+    job = make_job()
+    count, first = _job_node_summary(job)
+    assert count is None
+    assert first is None
+
+
+def test_job_node_summary_blank_nodes():
+    job = make_job(nodes="", resources_requested={})
+    count, first = _job_node_summary(job)
+    assert count is None
     assert first is None

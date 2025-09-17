@@ -82,55 +82,92 @@ def _format_datetime(value: Optional[datetime]) -> str:
 
 
 _NODE_COUNT_PATTERN = re.compile(r"^(\d+)")
+_NODE_CLEAN_PATTERN = re.compile(r"[\*/:]")
+_NODE_RANGE_PATTERN = re.compile(
+    r"^(?P<prefix>[^\[\]]*)\[(?P<body>[^\]]+)\](?P<suffix>.*)$"
+)
 
 
 def _split_node_spec(value: str) -> Iterable[str]:
     for part in value.replace(",", "+").split("+"):
-        segment = part.strip()
-        if segment:
+        if segment := part.strip():
             yield segment
 
 
-def _extract_exec_host_nodes(exec_host: Optional[str]) -> list[str]:
-    if not exec_host:
+def _clean_node_token(token: str) -> str:
+    """Return the node identifier portion of *token*.
+
+    PBS node specs frequently append resource qualifiers (e.g. ``:ppn=8``),
+    processor indices (``/0``) or slot multipliers (``*4``).  The node name is
+    always the prefix before any of these separators.
+    """
+
+    return _NODE_CLEAN_PATTERN.split(token.strip(), maxsplit=1)[0].strip()
+
+
+def _expand_node_token(token: str) -> list[str]:
+    """Expand a cleaned token into concrete node names.
+
+    Supports PBS range expressions such as ``node[01-03]`` and
+    ``node[01,04,06]`` by enumerating the requested nodes.  Tokens that do not
+    match this syntax are returned as-is.
+    """
+
+    match = _NODE_RANGE_PATTERN.match(token)
+    if not match:
+        return [token] if token else []
+
+    prefix = match.group("prefix")
+    suffix = match.group("suffix")
+    body = match.group("body")
+    expanded: list[str] = []
+    for fragment in body.split(","):
+        piece = fragment.strip()
+        if not piece:
+            continue
+        if "-" in piece:
+            start_str, end_str = (part.strip() for part in piece.split("-", 1))
+            if start_str.isdigit() and end_str.isdigit():
+                start = int(start_str)
+                end = int(end_str)
+                width = max(len(start_str), len(end_str))
+                step = 1 if start <= end else -1
+                for value in range(start, end + step, step):
+                    expanded.append(f"{prefix}{value:0{width}d}{suffix}")
+                continue
+        expanded.append(f"{prefix}{piece}{suffix}")
+    return expanded or [token]
+
+
+def _extract_nodes(
+    spec: Optional[str], *, allow_numeric: bool, expand_ranges: bool = True
+) -> list[str]:
+    if not spec:
         return []
-    nodes: list[str] = []
     seen: set[str] = set()
-    for raw_part in exec_host.split("+"):
-        part = raw_part.strip()
-        if not part:
+    nodes: list[str] = []
+    for part in _split_node_spec(spec):
+        cleaned = _clean_node_token(part)
+        if not cleaned:
             continue
-        if "*" in part:
-            part = part.split("*", 1)[0]
-        if "/" in part:
-            part = part.split("/", 1)[0]
-        candidate = part.strip()
-        if not candidate:
-            continue
-        if candidate not in seen:
-            seen.add(candidate)
-            nodes.append(candidate)
+        candidates = _expand_node_token(cleaned) if expand_ranges else [cleaned]
+        for candidate in candidates:
+            if not candidate:
+                continue
+            if not allow_numeric and candidate.isdigit():
+                continue
+            if candidate not in seen:
+                seen.add(candidate)
+                nodes.append(candidate)
     return nodes
+
+
+def _extract_exec_host_nodes(exec_host: Optional[str]) -> list[str]:
+    return _extract_nodes(exec_host, allow_numeric=True)
 
 
 def _extract_requested_nodes(nodes_spec: Optional[str]) -> list[str]:
-    if not nodes_spec:
-        return []
-    nodes: list[str] = []
-    seen: set[str] = set()
-    for part in _split_node_spec(nodes_spec):
-        candidate = part
-        if ":" in candidate:
-            candidate = candidate.split(":", 1)[0]
-        if "/" in candidate:
-            candidate = candidate.split("/", 1)[0]
-        candidate = candidate.strip()
-        if not candidate or candidate.isdigit():
-            continue
-        if candidate not in seen:
-            seen.add(candidate)
-            nodes.append(candidate)
-    return nodes
+    return _extract_nodes(nodes_spec, allow_numeric=True)
 
 
 def _parse_node_count_spec(spec: Optional[str]) -> Optional[int]:
@@ -142,31 +179,41 @@ def _parse_node_count_spec(spec: Optional[str]) -> Optional[int]:
     total = 0
     found = False
     for part in _split_node_spec(spec):
-        found = True
-        match = _NODE_COUNT_PATTERN.match(part)
+        stripped = part.strip()
+        if not stripped:
+            continue
+        match = _NODE_COUNT_PATTERN.match(stripped)
         if match:
+            found = True
             total += int(match.group(1))
-        else:
-            candidate = part
-            if ":" in candidate:
-                candidate = candidate.split(":", 1)[0]
-            if "/" in candidate:
-                candidate = candidate.split("/", 1)[0]
-            candidate = candidate.strip()
-            if candidate and not candidate.isdigit():
-                total += 1
+            continue
+        cleaned = _clean_node_token(stripped)
+        if not cleaned:
+            continue
+        candidates = _expand_node_token(cleaned)
+        if not candidates:
+            continue
+        found = True
+        total += len(candidates)
     if not found:
         return None
     return total
 
 
 def _job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
-    nodes = _extract_exec_host_nodes(job.exec_host)
-    if not nodes:
-        nodes = _extract_requested_nodes(job.nodes)
-    first_node = nodes[0] if nodes else None
-    if nodes:
-        return len(nodes), first_node
+    exec_nodes = _extract_exec_host_nodes(job.exec_host)
+    if exec_nodes:
+        return len(exec_nodes), exec_nodes[0]
+
+    requested_nodes = _extract_requested_nodes(job.nodes)
+    first_node = next((node for node in requested_nodes if not node.isdigit()), None)
+
+    requested_count = _parse_node_count_spec(job.nodes)
+    if requested_count is not None:
+        return requested_count, first_node
+
+    if requested_nodes:
+        return len(requested_nodes), first_node
 
     candidates = [
         job.resources_requested.get("select"),
@@ -178,7 +225,7 @@ def _job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
         count = _parse_node_count_spec(spec)
         if count is not None:
             return count, first_node
-    return None, first_node
+    return None, None
 
 
 class SummaryWidget(Static):
