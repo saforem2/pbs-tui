@@ -147,7 +147,14 @@ def _parse_node_count_spec(spec: Optional[str]) -> Optional[int]:
         if match:
             total += int(match.group(1))
         else:
-            total += 1
+            candidate = part
+            if ":" in candidate:
+                candidate = candidate.split(":", 1)[0]
+            if "/" in candidate:
+                candidate = candidate.split("/", 1)[0]
+            candidate = candidate.strip()
+            if candidate and not candidate.isdigit():
+                total += 1
     if not found:
         return None
     return total
@@ -162,8 +169,8 @@ def _job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
         return len(nodes), first_node
 
     candidates = [
-        job.resources_requested.get("nodect"),
         job.resources_requested.get("select"),
+        job.resources_requested.get("nodect"),
         job.resources_requested.get("nodes"),
         job.nodes,
     ]
