@@ -54,12 +54,12 @@ faster polling loop.
 
 ### Key bindings
 
-| Key | Action |
-| --- | ------ |
-| `q` | Quit the application |
-| `r` | Refresh immediately |
-| `j` | Focus the jobs table |
-| `n` | Focus the nodes table |
+| Key |       Action           |
+|:---:|:---------------------- |
+| `q` | Quit the application   |
+| `r` | Refresh immediately    |
+| `j` | Focus the jobs table   |
+| `n` | Focus the nodes table  |
 | `u` | Focus the queues table |
 
 Use the arrow keys/`PageUp`/`PageDown` to move through rows once a table has focus.
@@ -112,3 +112,22 @@ attributes.
   quickly see when data is stale.
 - When both PBS utilities are unavailable and the fallback is disabled, the UI will show an empty
   dashboard with an error message in the status bar.
+
+## Screenshots
+
+- `pbs-tui`:
+
+  <img width="2498" height="1828" alt="ScreenShot-2025-09-16-172415@2x" src="https://github.com/user-attachments/assets/419cecb6-25a1-4007-8456-38bd80fb4ae7" />
+
+
+- Keys and Help Panel:
+
+  <img width="2498" height="1828" alt="ScreenShot-2025-09-16-172451@2x" src="https://github.com/user-attachments/assets/d521d137-1135-4503-bcc0-2b9dba35d252" />
+  
+- Command palette:
+  
+  <img width="2498" height="1828" alt="ScreenShot-2025-09-16-172546@2x" src="https://github.com/user-attachments/assets/5804c99a-621a-4cce-adde-092f6d324824" />
+
+- theme support:
+  
+  <img width="2498" height="1828" alt="ScreenShot-2025-09-16-172702@2x" src="https://github.com/user-attachments/assets/d4009439-2ea7-49f5-9c75-5d25f7b13771" />
