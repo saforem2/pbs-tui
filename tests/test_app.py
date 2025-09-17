@@ -18,8 +18,7 @@ def make_job(**overrides):
         nodes=None,
         resources_requested={},
     )
-    defaults.update(overrides)
-    return Job(**defaults)
+    return Job(**(defaults | overrides))
 
 
 def test_env_flag_truthy(monkeypatch):

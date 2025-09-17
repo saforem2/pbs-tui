@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
-import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -24,6 +23,11 @@ from textual.pilot import Pilot
 
 from .data import Job, Node, Queue, SchedulerSnapshot
 from .fetcher import PBSDataFetcher
+from .nodes import (
+    _extract_exec_host_nodes,
+    _extract_requested_nodes,
+    _parse_node_count_spec,
+)
 
 JOB_STATE_LABELS = {
     "B": "Begun",
@@ -81,151 +85,56 @@ def _format_datetime(value: Optional[datetime]) -> str:
     return local_value.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
-_NODE_COUNT_PATTERN = re.compile(r"^(\d+)")
-_NODE_CLEAN_PATTERN = re.compile(r"[\*/:]")
-_NODE_RANGE_PATTERN = re.compile(
-    r"^(?P<prefix>[^\[\]]*)\[(?P<body>[^\]]+)\](?P<suffix>.*)$"
-)
-
-
-def _split_node_spec(value: str) -> Iterable[str]:
-    for part in value.replace(",", "+").split("+"):
-        if segment := part.strip():
-            yield segment
-
-
-def _clean_node_token(token: str) -> str:
-    """Return the node identifier portion of *token*.
-
-    PBS node specs frequently append resource qualifiers (e.g. ``:ppn=8``),
-    processor indices (``/0``) or slot multipliers (``*4``).  The node name is
-    always the prefix before any of these separators.
-    """
-
-    return _NODE_CLEAN_PATTERN.split(token.strip(), maxsplit=1)[0].strip()
-
-
-def _expand_node_token(token: str) -> list[str]:
-    """Expand a cleaned token into concrete node names.
-
-    Supports PBS range expressions such as ``node[01-03]`` and
-    ``node[01,04,06]`` by enumerating the requested nodes.  Tokens that do not
-    match this syntax are returned as-is.
-    """
-
-    match = _NODE_RANGE_PATTERN.match(token)
-    if not match:
-        return [token] if token else []
-
-    prefix = match.group("prefix")
-    suffix = match.group("suffix")
-    body = match.group("body")
-    expanded: list[str] = []
-    for fragment in body.split(","):
-        piece = fragment.strip()
-        if not piece:
-            continue
-        if "-" in piece:
-            start_str, end_str = (part.strip() for part in piece.split("-", 1))
-            if start_str.isdigit() and end_str.isdigit():
-                start = int(start_str)
-                end = int(end_str)
-                width = max(len(start_str), len(end_str))
-                step = 1 if start <= end else -1
-                for value in range(start, end + step, step):
-                    expanded.append(f"{prefix}{value:0{width}d}{suffix}")
-                continue
-        expanded.append(f"{prefix}{piece}{suffix}")
-    return expanded or [token]
-
-
-def _extract_nodes(
-    spec: Optional[str], *, allow_numeric: bool, expand_ranges: bool = True
-) -> list[str]:
-    if not spec:
-        return []
-    seen: set[str] = set()
-    nodes: list[str] = []
-    for part in _split_node_spec(spec):
-        cleaned = _clean_node_token(part)
-        if not cleaned:
-            continue
-        candidates = _expand_node_token(cleaned) if expand_ranges else [cleaned]
-        for candidate in candidates:
-            if not candidate:
-                continue
-            if not allow_numeric and candidate.isdigit():
-                continue
-            if candidate not in seen:
-                seen.add(candidate)
-                nodes.append(candidate)
-    return nodes
-
-
-def _extract_exec_host_nodes(exec_host: Optional[str]) -> list[str]:
-    return _extract_nodes(exec_host, allow_numeric=True)
-
-
-def _extract_requested_nodes(nodes_spec: Optional[str]) -> list[str]:
-    return _extract_nodes(nodes_spec, allow_numeric=True)
-
-
-def _parse_node_count_spec(spec: Optional[str]) -> Optional[int]:
-    if spec is None:
-        return None
-    spec = spec.strip()
-    if not spec:
-        return None
-    total = 0
-    found = False
-    for part in _split_node_spec(spec):
-        stripped = part.strip()
-        if not stripped:
-            continue
-        match = _NODE_COUNT_PATTERN.match(stripped)
-        if match:
-            found = True
-            total += int(match.group(1))
-            continue
-        cleaned = _clean_node_token(stripped)
-        if not cleaned:
-            continue
-        candidates = _expand_node_token(cleaned)
-        if not candidates:
-            continue
-        found = True
-        total += len(candidates)
-    if not found:
-        return None
-    return total
-
-
 def _job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
-    exec_nodes = _extract_exec_host_nodes(job.exec_host)
-    if exec_nodes:
+    """Return a heuristic ``(node_count, first_node)`` tuple for *job*.
+
+    The summary prefers concrete execution host assignments before falling back
+    to requested node specifications and resource metadata published with the
+    job.  This keeps UI code focused on presentation while centralising the
+    parsing heuristics in :mod:`pbs_tui.nodes`.
+    """
+
+    if exec_nodes := _extract_exec_host_nodes(job.exec_host):
         return len(exec_nodes), exec_nodes[0]
 
     requested_nodes = _extract_requested_nodes(job.nodes)
-    first_node = next((node for node in requested_nodes if not node.isdigit()), None)
+    first_named_node = next((node for node in requested_nodes if not node.isdigit()), None)
 
-    requested_count = _parse_node_count_spec(job.nodes)
-    if requested_count is not None:
-        return requested_count, first_node
+    if (requested_count := _parse_node_count_spec(job.nodes)) is not None:
+        return requested_count, first_named_node
 
     if requested_nodes:
-        return len(requested_nodes), first_node
+        return len(requested_nodes), first_named_node
 
-    candidates = [
+    fallback_specs = (
         job.resources_requested.get("select"),
         job.resources_requested.get("nodect"),
         job.resources_requested.get("nodes"),
         job.nodes,
-    ]
-    for spec in candidates:
-        count = _parse_node_count_spec(spec)
-        if count is not None:
-            return count, first_node
+    )
+    for spec in fallback_specs:
+        if (count := _parse_node_count_spec(spec)) is not None:
+            return count, first_named_node
     return None, None
+
+
+def _job_display_cells(job: Job, reference_time: datetime) -> list[Optional[str]]:
+    """Return ordered cell values for job table renderers."""
+
+    node_count, first_node = _job_node_summary(job)
+    runtime = _format_duration(job.runtime(reference_time))
+    return [
+        job.id,
+        job.name,
+        job.user,
+        job.queue,
+        JOB_STATE_LABELS.get(job.state, job.state),
+        job.nodes,
+        str(node_count) if node_count is not None else None,
+        first_node,
+        job.walltime,
+        runtime,
+    ]
 
 
 class SummaryWidget(Static):
@@ -405,19 +314,9 @@ class JobsTable(DataTable):
     def update_jobs(self, jobs: Iterable[Job], reference_time: datetime) -> None:
         self.clear()
         for job in _sort_jobs_for_display(jobs):
-            runtime = _format_duration(job.runtime(reference_time))
-            node_count, first_node = _job_node_summary(job)
+            cells = _job_display_cells(job, reference_time)
             self.add_row(
-                job.id,
-                job.name,
-                job.user,
-                job.queue,
-                JOB_STATE_LABELS.get(job.state, job.state),
-                job.nodes or "-",
-                str(node_count) if node_count is not None else "-",
-                first_node or "-",
-                job.walltime or "-",
-                runtime,
+                *(_table_cell(value) for value in cells),
                 key=job.id,
             )
 
@@ -665,20 +564,7 @@ def snapshot_to_markdown(snapshot: SchedulerSnapshot) -> str:
     reference_time = snapshot.timestamp or datetime.now()
     if snapshot.jobs:
         for job in _sort_jobs_for_display(snapshot.jobs):
-            runtime = _format_duration(job.runtime(reference_time))
-            node_count, first_node = _job_node_summary(job)
-            row = [
-                job.id,
-                job.name,
-                job.user,
-                job.queue,
-                JOB_STATE_LABELS.get(job.state, job.state),
-                job.nodes or "-",
-                str(node_count) if node_count is not None else "-",
-                first_node or "-",
-                job.walltime or "-",
-                runtime,
-            ]
+            row = _job_display_cells(job, reference_time)
             lines.append("| " + " | ".join(_markdown_cell(cell) for cell in row) + " |")
     else:
         empty_row = ["_No jobs available_"] + [""] * (len(headers) - 1)
@@ -725,19 +611,8 @@ def snapshot_to_table(snapshot: SchedulerSnapshot) -> Table:
     reference_time = snapshot.timestamp or datetime.now()
     if snapshot.jobs:
         for job in _sort_jobs_for_display(snapshot.jobs):
-            node_count, first_node = _job_node_summary(job)
-            table.add_row(
-                _table_cell(job.id),
-                _table_cell(job.name),
-                _table_cell(job.user),
-                _table_cell(job.queue),
-                _table_cell(JOB_STATE_LABELS.get(job.state, job.state)),
-                _table_cell(job.nodes or "-"),
-                _table_cell(str(node_count) if node_count is not None else "-"),
-                _table_cell(first_node or "-"),
-                _table_cell(job.walltime or "-"),
-                _table_cell(_format_duration(job.runtime(reference_time))),
-            )
+            row = _job_display_cells(job, reference_time)
+            table.add_row(*(_table_cell(cell) for cell in row))
     else:
         table.add_row(
             "No jobs available",
