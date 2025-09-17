@@ -72,10 +72,8 @@ def _expand_node_ranges(base: str) -> Iterator[str]:
 
 
 def normalize_node_tokens(token: str) -> Iterator[str]:
-    base = _NODE_CLEAN_PATTERN.split(token.strip(), maxsplit=1)[0].strip()
-    if not base:
-        return
-    yield from _expand_node_ranges(base)
+    if base := _NODE_CLEAN_PATTERN.split(token.strip(), maxsplit=1)[0].strip():
+        yield from _expand_node_ranges(base)
 
 
 def extract_nodes(spec: Optional[str], *, allow_numeric: bool) -> list[str]:
@@ -98,7 +96,8 @@ def extract_nodes(spec: Optional[str], *, allow_numeric: bool) -> list[str]:
 
 
 def extract_exec_host_nodes(exec_host: Optional[str]) -> list[str]:
-    return extract_nodes(exec_host, allow_numeric=True)
+    nodes = extract_nodes(exec_host, allow_numeric=True)
+    return sorted(nodes)
 
 
 def extract_requested_nodes(nodes_spec: Optional[str]) -> list[str]:
@@ -111,14 +110,17 @@ def parse_node_count_spec(spec: Optional[str]) -> Optional[int]:
     spec = spec.strip()
     if not spec:
         return None
-    total = 0
-    for part in split_node_spec(spec):
-        if match := _NODE_COUNT_PATTERN.match(part):
-            total += int(match.group(1))
-        else:
-            total += sum(
-                1
-                for node in normalize_node_tokens(part)
-                if node and any(char.isalnum() for char in node) and not node.isdigit()
+    total = sum(
+        int(match.group(1))
+        if (match := _NODE_COUNT_PATTERN.match(part))
+        else sum(
+            bool(
+                node
+                and any(char.isalnum() for char in node)
+                and not node.isdigit()
             )
+            for node in normalize_node_tokens(part)
+        )
+        for part in split_node_spec(spec)
+    )
     return total or None
