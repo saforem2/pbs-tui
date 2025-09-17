@@ -26,9 +26,8 @@ from .fetcher import PBSDataFetcher
 from .nodes import (
     extract_exec_host_nodes,
     extract_requested_nodes,
-    normalize_node_tokens,
+    first_requested_node,
     parse_node_count_spec,
-    split_node_spec,
 )
 from .ui_config import JOB_TABLE_COLUMNS
 
@@ -87,26 +86,6 @@ def _format_datetime(value: Optional[datetime]) -> str:
     except ValueError:
         local_value = value
     return local_value.strftime("%Y-%m-%d %H:%M:%S %Z")
-
-
-def _first_requested_node(spec: Optional[str]) -> Optional[str]:
-    if not spec:
-        return None
-
-    candidates = [
-        (part, node)
-        for part in split_node_spec(spec)
-        for node in normalize_node_tokens(part)
-        if node
-    ]
-
-    for _, candidate in candidates:
-        if any(char.isalpha() for char in candidate):
-            return candidate
-
-    return next((candidate for part, candidate in candidates if "[" in part), None)
-
-
 def job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
     """Return a heuristic ``(node_count, first_node)`` tuple for *job*.
 
@@ -116,7 +95,7 @@ def job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
     parsing heuristics in :mod:`pbs_tui.nodes`.
     """
 
-    first_node = _first_requested_node(job.nodes)
+    first_node = first_requested_node(job.nodes)
 
     if exec_nodes := extract_exec_host_nodes(job.exec_host):
         return len(exec_nodes), exec_nodes[0]
@@ -138,7 +117,7 @@ def format_job_table_cells(job: Job, reference_time: datetime) -> list[Optional[
 
     node_count, first_node = job_node_summary(job)
     runtime = _format_duration(job.runtime(reference_time))
-    return [
+    cells = [
         job.id,
         job.name,
         job.user,
@@ -150,6 +129,8 @@ def format_job_table_cells(job: Job, reference_time: datetime) -> list[Optional[
         job.walltime,
         runtime,
     ]
+    assert len(cells) == len(JOB_TABLE_COLUMNS), "job table cell count must match column metadata"
+    return cells
 
 
 class SummaryWidget(Static):

@@ -6,7 +6,14 @@ import pytest
 
 from rich.console import Console
 
-from pbs_tui.app import PBSTUI, _env_flag, run, snapshot_to_markdown, snapshot_to_table
+from pbs_tui.app import (
+    PBSTUI,
+    _env_flag,
+    format_job_table_cells,
+    run,
+    snapshot_to_markdown,
+    snapshot_to_table,
+)
 from pbs_tui.data import SchedulerSnapshot
 from pbs_tui.samples import sample_snapshot
 from pbs_tui.ui_config import JOB_TABLE_COLUMNS
@@ -106,6 +113,12 @@ def _inline_output(monkeypatch, capsys, *job_overrides: dict) -> tuple[str, str]
     return captured.out, captured.err
 
 
+def test_format_job_table_cells_matches_columns():
+    job = make_job()
+    cells = format_job_table_cells(job, NOW)
+    assert len(cells) == len(JOB_TABLE_COLUMNS)
+
+
 def test_run_inline_displays_sample_job_data(monkeypatch, capsys):
     out, err = _inline_output(monkeypatch, capsys)
     assert "PBS Jobs as of" in out
@@ -139,6 +152,26 @@ def test_run_inline_handles_multi_node_job(monkeypatch, capsys):
     multi_row = _row_from_rich(multi_line)
     assert multi_row["Node Count"] == "2"
     assert multi_row["First Node"] == "nodeA"
+
+
+def test_run_inline_handles_bracketed_exec_host(monkeypatch, capsys):
+    out, _ = _inline_output(
+        monkeypatch,
+        capsys,
+        dict(
+            id="bracket_exec.001",
+            name="bracket_exec",
+            state="R",
+            exec_host="node[01-03]/0",
+            nodes="node[01-03]",
+        ),
+    )
+
+    bracket_line = next((line for line in out.splitlines() if "bracket_exec" in line), None)
+    assert bracket_line is not None, "Expected bracketed exec_host row in inline output"
+    bracket_row = _row_from_rich(bracket_line)
+    assert bracket_row["Node Count"] == "3"
+    assert bracket_row["First Node"] == "node01"
 
 
 def test_run_inline_shows_placeholders_for_missing_nodes(monkeypatch, capsys):
@@ -200,6 +233,26 @@ def test_run_inline_prefers_exec_host_over_nodes(monkeypatch, capsys):
     conflict_row = _row_from_rich(conflict_line)
     assert conflict_row["Node Count"] == "2"
     assert conflict_row["First Node"] == "nodeX"
+
+
+def test_run_inline_exec_host_nodes_count_disagreement(monkeypatch, capsys):
+    out, _ = _inline_output(
+        monkeypatch,
+        capsys,
+        dict(
+            id="disagree.789",
+            name="disagree_job",
+            state="R",
+            exec_host="nodeA/0+nodeB/1+nodeC/2",
+            nodes="nodeA+nodeB",
+        ),
+    )
+
+    disagree_line = next((line for line in out.splitlines() if "disagree_job" in line), None)
+    assert disagree_line is not None, "Expected disagreement row in inline output"
+    disagree_row = _row_from_rich(disagree_line)
+    assert disagree_row["Node Count"] == "3"
+    assert disagree_row["First Node"] == "nodeA"
 
 
 def test_run_inline_writes_markdown_file(monkeypatch, tmp_path, capsys):
@@ -315,5 +368,35 @@ def test_snapshot_outputs_handle_job_without_nodes():
     _assert_snapshot_row(
         markdown, rendered, "resource_only", node_count="2", first_node="-"
     )
+
+
+def test_snapshot_outputs_handle_malformed_resource_specs():
+    malformed_jobs = [
+        make_job(
+            id="malformed_1",
+            name="malformed_1",
+            nodes=None,
+            resources_requested={"select": "not_a_number:ncpus=abc"},
+        ),
+        make_job(id="malformed_2", name="malformed_2", nodes=None, resources_requested={"select": ""}),
+        make_job(id="malformed_3", name="malformed_3", nodes=None, resources_requested={"select": None}),
+    ]
+    snapshot = SchedulerSnapshot(jobs=malformed_jobs, source="test")
+
+    markdown = snapshot_to_markdown(snapshot)
+    table = snapshot_to_table(snapshot)
+    console = Console(record=True, width=120)
+    console.print(table)
+    rendered = console.export_text()
+
+    expected = {
+        "malformed_1": ("1", "-"),
+        "malformed_2": ("-", "-"),
+        "malformed_3": ("-", "-"),
+    }
+
+    for job in malformed_jobs:
+        count, first = expected[job.id]
+        _assert_snapshot_row(markdown, rendered, job.id, node_count=count, first_node=first)
 
 

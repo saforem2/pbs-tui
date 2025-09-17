@@ -24,6 +24,15 @@ from .util import make_job
             (2, "nodeA"),
         ),
         pytest.param(
+            "exec_host_range",
+            {
+                "state": "R",
+                "exec_host": "node[01-03]/0",
+                "nodes": "node[01-03]",
+            },
+            (3, "node01"),
+        ),
+        pytest.param(
             "exec_host_empty",
             {"exec_host": "", "nodes": "node01+node02"},
             (2, "node01"),
@@ -62,6 +71,15 @@ from .util import make_job
             "fallback_nodect",
             {"resources_requested": {"nodect": "5"}},
             (5, None),
+        ),
+        pytest.param(
+            "exec_host_overrides_nodes_count",
+            {
+                "state": "R",
+                "exec_host": "nodeA/0+nodeB/1+nodeC/2",
+                "nodes": "nodeA+nodeB",
+            },
+            (3, "nodeA"),
         ),
         pytest.param("missing_nodes", {}, (None, None)),
         pytest.param(
