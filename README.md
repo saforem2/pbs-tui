@@ -14,7 +14,7 @@ track workload health in real time.
 - Try it out!
 
   ```bash
-  uv run --wtih pbs-tui pbs-tui
+  uv run --with pbs-tui pbs-tui
   ```
 
 ## Features
