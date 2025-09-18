@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags:
+      # Publish on any tag starting with a `v`, e.g., v1.2.3
+      - v*
+
+jobs:
+  pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.12", "3.13"]
+    # Environment and permissions trusted publishing.
+    environment:
+      # Create this environment in the GitHub repository under Settings -> Environments
+      name: pypi
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      # - name: Install Python 3.13
+      #   run: uv python install 3.13
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4
+        with:
+          # version: "0.6.7.0"
+          # checksum: "b75a909f75acd358c2196fb9a5f1299a9a8868a4"
+          activate-environment: true
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install dependencies
+        run: uv sync --dev
+      - name: Test with python ${{ matrix.python-version }}
+        run: uv run pytest
+      - name: Build
+        run: uv build
+      - name: Publish
+        run: uv publish --token ${{ secrets.PYPI_TOKEN }}
