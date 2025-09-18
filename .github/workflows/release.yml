@@ -1,45 +1,52 @@
-name: Release
+name: Publish Python 🐍 distribution 📦 to PyPI
 
-on:
-  push:
-    tags:
-      # Publish on any tag starting with a `v`, e.g., v1.2.3
-      - v*
+on: push
 
 jobs:
-  pypi:
-    name: Publish to PyPI
+  build:
+    name: Build distribution 📦
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.12"]
-    # Environment and permissions trusted publishing.
-    environment:
-      # Create this environment in the GitHub repository under Settings -> Environments
-      name: pypi
-      url: https://pypi.org/p/pbs-tui
-    permissions:
-      id-token: write
-      contents: read
+
     steps:
-      # - name: Install Python 3.13
-      #   run: uv python install 3.13
-      - name: Checkout the repository
-        uses: actions/checkout@v4
-      - name: Install uv
-        uses: astral-sh/setup-uv@b75a909f75acd358c2196fb9a5f1299a9a8868a4
-        with:
-          # version: "0.6.7.0"
-          # checksum: "b75a909f75acd358c2196fb9a5f1299a9a8868a4"
-          activate-environment: true
-          python-version: ${{ matrix.python-version }}
-          enable-cache: true
-          save-cache: ${{ github.ref == 'refs/heads/main' }}
-      # - run: uv pip install -e ".[dev]"
-      # - name: Install dependencies
-      # - name: Test with python ${{ matrix.python-version }}
-      #   run: uv run pytest
-      - name: Build
-        run: uv build
-      - name: Publish
-        run: uv publish --token ${{ secrets.PYPI_TOKEN }}
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.x"
+    - name: Install pypa/build
+      run: >-
+        python3 -m
+        pip install
+        build
+        --user
+    - name: Build a binary wheel and a source tarball
+      run: python3 -m build
+    - name: Store the distribution packages
+      uses: actions/upload-artifact@v4
+      with:
+        name: python-package-distributions
+        path: dist/
+
+  publish-to-pypi:
+    name: >-
+      Publish Python 🐍 distribution 📦 to PyPI
+    if: startsWith(github.ref, 'refs/tags/')  # only publish to PyPI on tag pushes
+    needs:
+    - build
+    runs-on: ubuntu-latest
+    environment:
+      name: python
+      url: https://pypi.org/p/pbs-tui  # Replace <package-name> with your PyPI project name
+    permissions:
+      id-token: write  # IMPORTANT: mandatory for trusted publishing
+
+    steps:
+    - name: Download all the dists
+      uses: actions/download-artifact@v4
+      with:
+        name: python-package-distributions
+        path: dist/
+    - name: Publish distribution 📦 to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
