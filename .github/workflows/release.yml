@@ -34,9 +34,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
           save-cache: ${{ github.ref == 'refs/heads/main' }}
-      - run: uv pip install pip
-      - name: Install pbs-tui
-        run: uv pip install -e ".[dev]"
+      - name: Install dependencies
+        run: uv sync --dev
       - name: Test with python ${{ matrix.python-version }}
         run: uv run pytest
       - name: Build
