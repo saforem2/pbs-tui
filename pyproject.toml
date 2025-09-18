@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "pbs-tui"
-version = "0.2.1"
+version = "0.3.0"
 # dynamic = ["version"]
 description = "Textual TUI dashboard for monitoring PBS Pro schedulers"
 readme = "README.md"
