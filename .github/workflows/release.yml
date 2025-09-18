@@ -17,6 +17,7 @@ jobs:
     environment:
       # Create this environment in the GitHub repository under Settings -> Environments
       name: pypi
+      url: https://pypi.org/p/pbs-tui
     permissions:
       id-token: write
       contents: read
