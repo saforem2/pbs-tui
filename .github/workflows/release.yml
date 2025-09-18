@@ -37,30 +37,71 @@ jobs:
       - name: Build package
         run: uv build
 
+      - name: Install tomlkit
+        run: python -m pip install tomlkit
+
+      - name: Determine project metadata
+        id: metadata
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+import tomlkit
+from pathlib import Path
+
+data = tomlkit.parse(Path("pyproject.toml").read_text(encoding="utf-8"))
+project = data["project"]
+print(f"name={project['name']}")
+print(f"version={project['version']}")
+PY
+
+      - name: Verify release is new on PyPI
+        if: env.PYPI_TOKEN != ''
+        run: |
+          python - <<'PY'
+import json
+import sys
+import urllib.error
+import urllib.request
+
+name = "${{ steps.metadata.outputs.name }}"
+version = "${{ steps.metadata.outputs.version }}"
+url = f"https://pypi.org/pypi/{name}/json"
+
+try:
+    with urllib.request.urlopen(url) as response:
+        data = json.load(response)
+except urllib.error.HTTPError as exc:
+    if exc.code == 404:
+        sys.exit(0)
+    raise
+except urllib.error.URLError:
+    sys.exit(0)
+
+if version in data.get("releases", {}):
+    print(f"Version {version} of {name} already exists on PyPI.")
+    sys.exit(1)
+PY
+
       - name: Publish to PyPI
         if: env.PYPI_TOKEN != ''
         env:
           UV_PUBLISH_TOKEN: ${{ env.PYPI_TOKEN }}
-        run: uv publish --token "$UV_PUBLISH_TOKEN" --skip-existing
+        run: uv publish --token "$UV_PUBLISH_TOKEN"
 
-      - name: Determine release version
-        id: version
+      - name: Extract current version release notes
         run: |
-          VERSION=$(python - <<'PY'
-import tomllib
-with open("pyproject.toml", "rb") as f:
-    data = tomllib.load(f)
-print(data["project"]["version"])
-PY
-)
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          VERSION="${{ steps.metadata.outputs.version }}"
+          awk "/^## \\[?${VERSION}\\]?/ {flag=1; print; next} /^## / {flag=0} flag" CHANGELOG.md > .github/current_release_notes.md
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: v${{ steps.version.outputs.version }}
-          body_path: CHANGELOG.md
+          tag_name: v${{ steps.metadata.outputs.version }}
+          name: v${{ steps.metadata.outputs.version }}
+          body_path: .github/current_release_notes.md
           files: dist/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Clean up release notes
+        if: always()
+        run: rm -f .github/current_release_notes.md
