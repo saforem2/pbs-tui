@@ -20,6 +20,11 @@ dependencies = [
 [project.scripts]
 pbs-tui = "pbs_tui.app:run"
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.4.2",
+]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["pbs_tui", "pbs_tui/app.tcss"]

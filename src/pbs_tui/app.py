@@ -8,7 +8,7 @@ import os
 import sys
 from collections import Counter
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional, Sequence
 
 from rich import box
@@ -23,6 +23,13 @@ from textual.pilot import Pilot
 
 from .data import Job, Node, Queue, SchedulerSnapshot
 from .fetcher import PBSDataFetcher
+from .nodes import (
+    extract_exec_host_nodes,
+    extract_requested_nodes,
+    first_requested_node,
+    parse_node_count_spec,
+)
+from .ui_config import JOB_TABLE_COLUMNS
 
 JOB_STATE_LABELS = {
     "B": "Begun",
@@ -35,6 +42,7 @@ JOB_STATE_LABELS = {
     "T": "Transit",
     "W": "Waiting",
 }
+
 
 
 def _sort_jobs_for_display(jobs: Iterable[Job]) -> list[Job]:
@@ -73,11 +81,62 @@ def _format_duration(duration: Optional[timedelta]) -> str:
 def _format_datetime(value: Optional[datetime]) -> str:
     if value is None:
         return "-"
+
+    if value.tzinfo is None:
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+
     try:
-        local_value = value.astimezone()
+        normalized = value.astimezone(timezone.utc)
     except ValueError:
-        local_value = value
-    return local_value.strftime("%Y-%m-%d %H:%M:%S %Z")
+        normalized = value
+    return normalized.strftime("%Y-%m-%d %H:%M:%S %Z")
+def job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
+    """Return a heuristic ``(node_count, first_node)`` tuple for *job*.
+
+    The summary prefers concrete execution host assignments before falling back
+    to requested node specifications and resource metadata published with the
+    job.  This keeps UI code focused on presentation while centralising the
+    parsing heuristics in :mod:`pbs_tui.nodes`.
+    """
+
+    if exec_nodes := extract_exec_host_nodes(job.exec_host):
+        first_exec = next((node for node in exec_nodes if not node.isdigit()), exec_nodes[0])
+        return len(exec_nodes), first_exec
+
+    first_node = first_requested_node(job.nodes)
+
+    if (count := parse_node_count_spec(job.nodes)) is not None:
+        return count, first_node
+
+    if requested_nodes := extract_requested_nodes(job.nodes):
+        return len(requested_nodes), first_node
+
+    for key in ("select", "nodes", "nodect"):
+        if (count := parse_node_count_spec(job.resources_requested.get(key))) is not None:
+            return count, first_node
+    return None, None
+
+
+def format_job_table_cells(job: Job, reference_time: datetime) -> dict[str, Optional[str]]:
+    """Return column-keyed cell values for job table renderers."""
+
+    node_count, first_node = job_node_summary(job)
+    runtime = _format_duration(job.runtime(reference_time))
+    raw_values: dict[str, Optional[str]] = {
+        "Job ID": job.id,
+        "Name": job.name,
+        "User": job.user,
+        "Queue": job.queue,
+        "State": JOB_STATE_LABELS.get(job.state, job.state),
+        "Nodes": job.nodes,
+        "Node Count": str(node_count) if node_count is not None else None,
+        "First Node": first_node,
+        "Walltime": job.walltime,
+        "Runtime": runtime,
+    }
+    ordered = {label: raw_values[label] for label, _ in JOB_TABLE_COLUMNS}
+    assert len(ordered) == len(JOB_TABLE_COLUMNS), "job table cells must match column metadata"
+    return ordered
 
 
 class SummaryWidget(Static):
@@ -241,23 +300,14 @@ class JobsTable(DataTable):
         self.cursor_type = "row"
         self.zebra_stripes = True
         self.show_header = True
-        self.add_columns("Job ID", "Name", "User", "Queue", "State", "Nodes", "Walltime", "Runtime")
+        self.add_columns(*(label for label, _ in JOB_TABLE_COLUMNS))
 
     def update_jobs(self, jobs: Iterable[Job], reference_time: datetime) -> None:
         self.clear()
         for job in _sort_jobs_for_display(jobs):
-            runtime = _format_duration(job.runtime(reference_time))
-            self.add_row(
-                job.id,
-                job.name,
-                job.user,
-                job.queue,
-                JOB_STATE_LABELS.get(job.state, job.state),
-                job.nodes or "-",
-                job.walltime or "-",
-                runtime,
-                key=job.id,
-            )
+            cells = format_job_table_cells(job, reference_time)
+            ordered = [cells[label] for label, _ in JOB_TABLE_COLUMNS]
+            self.add_row(*(_format_cell_value(value) for value in ordered), key=job.id)
 
 
 class NodesTable(DataTable):
@@ -453,22 +503,13 @@ def _escape_markdown_cell(text: str) -> str:
     return cleaned.strip()
 
 
+def _format_cell_value(value: Optional[str]) -> str:
+    text = "-" if value is None else str(value)
+    return text if text.strip() else "-"
+
+
 def _markdown_cell(value: Optional[str]) -> str:
-    if value is None:
-        return "-"
-    text = str(value)
-    if not text.strip():
-        return "-"
-    return _escape_markdown_cell(text)
-
-
-def _table_cell(value: Optional[str]) -> str:
-    if value is None:
-        return "-"
-    text = str(value)
-    if not text.strip():
-        return "-"
-    return text
+    return _escape_markdown_cell(_format_cell_value(value))
 
 
 def snapshot_to_markdown(snapshot: SchedulerSnapshot) -> str:
@@ -486,24 +527,15 @@ def snapshot_to_markdown(snapshot: SchedulerSnapshot) -> str:
         f"*Source*: {snapshot.source}",
         "",
     ]
-    headers = ["Job ID", "Name", "User", "Queue", "State", "Nodes", "Walltime", "Runtime"]
+    headers = [label for label, _ in JOB_TABLE_COLUMNS]
     lines.append("| " + " | ".join(headers) + " |")
     lines.append("| " + " | ".join(["---"] * len(headers)) + " |")
     reference_time = snapshot.timestamp or datetime.now()
     if snapshot.jobs:
         for job in _sort_jobs_for_display(snapshot.jobs):
-            runtime = _format_duration(job.runtime(reference_time))
-            row = [
-                job.id,
-                job.name,
-                job.user,
-                job.queue,
-                JOB_STATE_LABELS.get(job.state, job.state),
-                job.nodes or "-",
-                job.walltime or "-",
-                runtime,
-            ]
-            lines.append("| " + " | ".join(_markdown_cell(cell) for cell in row) + " |")
+            row = format_job_table_cells(job, reference_time)
+            ordered = [row[label] for label, _ in JOB_TABLE_COLUMNS]
+            lines.append("| " + " | ".join(_markdown_cell(cell) for cell in ordered) + " |")
     else:
         empty_row = ["_No jobs available_"] + [""] * (len(headers) - 1)
         lines.append("| " + " | ".join(empty_row) + " |")
@@ -531,36 +563,19 @@ def snapshot_to_table(snapshot: SchedulerSnapshot) -> Table:
         box=box.SIMPLE_HEAVY,
         highlight=True,
     )
-    headers = [
-        ("Job ID", "left"),
-        ("Name", "left"),
-        ("User", "left"),
-        ("Queue", "left"),
-        ("State", "left"),
-        ("Nodes", "left"),
-        ("Walltime", "left"),
-        ("Runtime", "left"),
-    ]
-    for header, justify in headers:
+    for header, justify in JOB_TABLE_COLUMNS:
         table.add_column(header, justify=justify)
 
     reference_time = snapshot.timestamp or datetime.now()
     if snapshot.jobs:
         for job in _sort_jobs_for_display(snapshot.jobs):
-            table.add_row(
-                _table_cell(job.id),
-                _table_cell(job.name),
-                _table_cell(job.user),
-                _table_cell(job.queue),
-                _table_cell(JOB_STATE_LABELS.get(job.state, job.state)),
-                _table_cell(job.nodes or "-"),
-                _table_cell(job.walltime or "-"),
-                _table_cell(_format_duration(job.runtime(reference_time))),
-            )
+            row = format_job_table_cells(job, reference_time)
+            ordered = [row[label] for label, _ in JOB_TABLE_COLUMNS]
+            table.add_row(*(_format_cell_value(cell) for cell in ordered))
     else:
         table.add_row(
             "No jobs available",
-            *[""] * (len(headers) - 1),
+            *[""] * (len(JOB_TABLE_COLUMNS) - 1),
             style="italic",
         )
     return table
@@ -610,7 +625,11 @@ def run(
 
     if args.inline:
         snapshot = asyncio.run(fetcher_instance.fetch_snapshot())
-        console = Console()
+        stdout_is_tty = sys.stdout.isatty()
+        console = Console(
+            force_terminal=not stdout_is_tty,
+            color_system=None if not stdout_is_tty else None,
+        )
         console.print(snapshot_to_table(snapshot))
         if args.file:
             args.file.write_text(snapshot_to_markdown(snapshot) + "\n")
