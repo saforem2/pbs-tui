@@ -78,6 +78,61 @@ def _format_duration(duration: Optional[timedelta]) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
+def _parse_walltime(value: Optional[str]) -> Optional[timedelta]:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    days = 0
+    if "-" in text:
+        day_part, _, remainder = text.partition("-")
+        try:
+            days = int(day_part)
+        except ValueError:
+            return None
+        text = remainder
+    parts = text.split(":")
+    try:
+        if len(parts) == 1:
+            hours = int(parts[0])
+            minutes = 0
+            seconds = 0
+        elif len(parts) == 2:
+            hours, minutes = (int(part) for part in parts)
+            seconds = 0
+        elif len(parts) == 3:
+            hours, minutes, seconds = (int(part) for part in parts)
+        else:
+            return None
+    except ValueError:
+        return None
+    total_seconds = seconds + minutes * 60 + hours * 3600 + days * 86400
+    return timedelta(seconds=total_seconds)
+
+
+def _clamp_duration(duration: Optional[timedelta]) -> Optional[timedelta]:
+    if duration is None:
+        return None
+    if duration.total_seconds() < 0:
+        return timedelta(0)
+    return duration
+
+
+def _duration_between(
+    start: Optional[datetime], end: Optional[datetime]
+) -> Optional[timedelta]:
+    if start is None or end is None:
+        return None
+    start_dt = start
+    end_dt = end
+    if start_dt.tzinfo is not None and end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=start_dt.tzinfo)
+    elif start_dt.tzinfo is None and end_dt.tzinfo is not None:
+        start_dt = start_dt.replace(tzinfo=end_dt.tzinfo)
+    return end_dt - start_dt
+
+
 def _format_datetime(value: Optional[datetime]) -> str:
     if value is None:
         return "-"
@@ -90,6 +145,58 @@ def _format_datetime(value: Optional[datetime]) -> str:
     except ValueError:
         normalized = value
     return normalized.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def _requested_walltime_duration(job: Job) -> Optional[timedelta]:
+    walltime = job.walltime or job.resources_requested.get("walltime")
+    return _parse_walltime(walltime)
+
+
+def _used_walltime_duration(job: Job) -> Optional[timedelta]:
+    if not job.resources_used:
+        return None
+    for key, value in job.resources_used.items():
+        if key.lower() == "walltime":
+            return _parse_walltime(value)
+    return None
+
+
+def _job_queue_duration(job: Job, reference_time: datetime) -> Optional[timedelta]:
+    if job.eligible_duration is not None:
+        return job.eligible_duration
+
+    anchor = job.eligible_start_time or job.queue_time or job.create_time
+    if anchor is None:
+        return None
+
+    if job.start_time is not None and job.state in {"R", "F"}:
+        return _duration_between(anchor, job.start_time)
+
+    return _duration_between(anchor, reference_time)
+
+
+def _job_runtime_duration(job: Job, reference_time: Optional[datetime]) -> Optional[timedelta]:
+    if reference_time is None:
+        reference_time = datetime.now(timezone.utc)
+
+    if (used := _used_walltime_duration(job)) is not None:
+        return used
+
+    if job.start_time is None:
+        return None
+
+    end_point = job.end_time or reference_time
+    return _duration_between(job.start_time, end_point)
+
+
+def _job_time_remaining_duration(
+    job: Job, runtime_duration: Optional[timedelta]
+) -> Optional[timedelta]:
+    requested = _requested_walltime_duration(job)
+    if requested is None or runtime_duration is None:
+        return None
+
+    return requested - runtime_duration
 def job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
     """Return a heuristic ``(node_count, first_node)`` tuple for *job*.
 
@@ -121,18 +228,28 @@ def format_job_table_cells(job: Job, reference_time: datetime) -> dict[str, Opti
     """Return column-keyed cell values for job table renderers."""
 
     node_count, first_node = job_node_summary(job)
-    runtime = _format_duration(job.runtime(reference_time))
+    walltime = job.walltime or job.resources_requested.get("walltime")
+    runtime_duration = _job_runtime_duration(job, reference_time)
+    queued_duration = _job_queue_duration(job, reference_time)
+    time_remaining = _job_time_remaining_duration(job, runtime_duration)
+
+    location = job.comment or first_node
+
     raw_values: dict[str, Optional[str]] = {
-        "Job ID": job.id,
-        "Name": job.name,
+        "#JobId": job.id,
         "User": job.user,
+        "Account": job.account,
+        "Score": str(job.score) if job.score is not None else None,
+        "WallTime": walltime,
+        "QueuedTime": _format_duration(_clamp_duration(queued_duration)),
+        "EstStart": _format_datetime(job.estimated_start_time),
+        "RunTime": _format_duration(_clamp_duration(runtime_duration)),
+        "TimeRemaining": _format_duration(_clamp_duration(time_remaining)),
+        "Nodes": str(node_count) if node_count is not None else None,
         "Queue": job.queue,
         "State": JOB_STATE_LABELS.get(job.state, job.state),
-        "Nodes": job.nodes,
-        "Node Count": str(node_count) if node_count is not None else None,
-        "First Node": first_node,
-        "Walltime": job.walltime,
-        "Runtime": runtime,
+        "JobName": job.name,
+        "Location/Comments": location,
     }
     ordered = {label: raw_values[label] for label, _ in JOB_TABLE_COLUMNS}
     assert len(ordered) == len(JOB_TABLE_COLUMNS), "job table cells must match column metadata"
@@ -223,7 +340,10 @@ class DetailPanel(Static):
         table.add_row("Submitted", _format_datetime(job.create_time))
         table.add_row("Started", _format_datetime(job.start_time))
         table.add_row("Finished", _format_datetime(job.end_time))
-        table.add_row("Runtime", _format_duration(job.runtime(reference_time)))
+        table.add_row(
+            "Runtime",
+            _format_duration(_clamp_duration(_job_runtime_duration(job, reference_time))),
+        )
         table.add_row(
             "Requested",
             ", ".join(f"{k}={v}" for k, v in sorted(job.resources_requested.items())) or "-",

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import re
 
@@ -56,16 +56,16 @@ def _assert_snapshot_row(
     rendered: str,
     job_id: str,
     *,
-    node_count: str,
-    first_node: str,
+    nodes: str,
+    location: str,
 ) -> None:
     markdown_cells = _find_markdown_row(markdown, job_id)
-    assert markdown_cells["Node Count"] == node_count
-    assert markdown_cells["First Node"] == first_node
+    assert markdown_cells["Nodes"] == nodes
+    assert markdown_cells["Location/Comments"] == location
 
     table_cells = _find_rich_row(rendered, job_id)
-    assert table_cells["Node Count"] == node_count
-    assert table_cells["First Node"] == first_node
+    assert table_cells["Nodes"] == nodes
+    assert table_cells["Location/Comments"] == location
 
 
 def test_env_flag_truthy(monkeypatch):
@@ -117,6 +117,73 @@ def test_format_job_table_cells_matches_columns():
     job = make_job()
     cells = format_job_table_cells(job, NOW)
     assert list(cells.keys()) == [label for label, _ in JOB_TABLE_COLUMNS]
+
+
+def test_format_job_table_cells_runtime_prefers_resources_used_walltime():
+    job = make_job(
+        state="R",
+        walltime="01:00:00",
+        resources_requested={"walltime": "01:00:00"},
+        start_time=NOW - timedelta(hours=3),
+        resources_used={"walltime": "00:10:00"},
+        eligible_duration=timedelta(minutes=5),
+    )
+
+    cells = format_job_table_cells(job, NOW)
+    assert cells["RunTime"] == "00:10:00"
+    assert cells["TimeRemaining"] == "00:50:00"
+
+
+def test_format_job_table_cells_queue_time_uses_eligible_duration():
+    job = make_job(
+        state="R",
+        start_time=NOW - timedelta(hours=1),
+        eligible_duration=timedelta(minutes=7),
+        walltime="00:30:00",
+        resources_requested={"walltime": "00:30:00"},
+    )
+
+    cells = format_job_table_cells(job, NOW)
+    assert cells["QueuedTime"] == "00:07:00"
+
+
+def test_format_job_table_cells_queue_time_falls_back_to_eligible_start():
+    job = make_job(
+        state="Q",
+        eligible_start_time=NOW - timedelta(hours=2),
+        queue_time=None,
+        eligible_duration=None,
+    )
+
+    cells = format_job_table_cells(job, NOW)
+    assert cells["QueuedTime"] == "02:00:00"
+
+
+def test_format_job_table_cells_queue_time_falls_back_to_queue_time():
+    job = make_job(
+        state="Q",
+        queue_time=NOW - timedelta(minutes=20),
+        eligible_duration=None,
+        eligible_start_time=None,
+    )
+
+    cells = format_job_table_cells(job, NOW)
+    assert cells["QueuedTime"] == "00:20:00"
+
+
+def test_format_job_table_cells_runtime_uses_end_time_when_available():
+    job = make_job(
+        state="F",
+        walltime="02:00:00",
+        resources_requested={"walltime": "02:00:00"},
+        start_time=NOW - timedelta(hours=3),
+        end_time=NOW - timedelta(hours=1),
+        eligible_duration=timedelta(minutes=30),
+    )
+
+    cells = format_job_table_cells(job, NOW)
+    assert cells["RunTime"] == "02:00:00"
+    assert cells["TimeRemaining"] == "00:00:00"
 
 
 # def test_run_inline_displays_sample_job_data(monkeypatch, capsys):
@@ -360,13 +427,13 @@ def test_snapshot_outputs_handle_job_without_nodes():
 
     markdown = snapshot_to_markdown(snapshot)
     table = snapshot_to_table(snapshot)
-    console = Console(record=True, width=120)
+    console = Console(record=True, width=240)
     console.print(table)
     rendered = console.export_text()
 
-    _assert_snapshot_row(markdown, rendered, "no_nodes", node_count="-", first_node="-")
+    _assert_snapshot_row(markdown, rendered, "no_nodes", nodes="-", location="-")
     _assert_snapshot_row(
-        markdown, rendered, "resource_only", node_count="2", first_node="-"
+        markdown, rendered, "resource_only", nodes="2", location="-"
     )
 
 
@@ -385,12 +452,12 @@ def test_snapshot_outputs_handle_malformed_resource_specs():
 
     markdown = snapshot_to_markdown(snapshot)
     table = snapshot_to_table(snapshot)
-    console = Console(record=True, width=120)
+    console = Console(record=True, width=240)
     console.print(table)
     rendered = console.export_text()
 
-    _assert_snapshot_row(markdown, rendered, "malformed_1", node_count="1", first_node="-")
-    _assert_snapshot_row(markdown, rendered, "malformed_2", node_count="-", first_node="-")
-    _assert_snapshot_row(markdown, rendered, "malformed_3", node_count="-", first_node="-")
+    _assert_snapshot_row(markdown, rendered, "malformed_1", nodes="1", location="-")
+    _assert_snapshot_row(markdown, rendered, "malformed_2", nodes="-", location="-")
+    _assert_snapshot_row(markdown, rendered, "malformed_3", nodes="-", location="-")
 
 

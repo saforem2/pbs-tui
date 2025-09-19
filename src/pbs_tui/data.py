@@ -17,11 +17,17 @@ class Job:
     queue: str
     state: str
     exec_host: Optional[str] = None
+    account: Optional[str] = None
+    score: Optional[int] = None
     create_time: Optional[datetime] = None
+    queue_time: Optional[datetime] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+    eligible_duration: Optional[timedelta] = None
+    eligible_start_time: Optional[datetime] = None
     walltime: Optional[str] = None
     nodes: Optional[str] = None
+    estimated_start_time: Optional[datetime] = None
     resources_requested: Dict[str, str] = field(default_factory=dict)
     resources_used: Dict[str, str] = field(default_factory=dict)
     comment: Optional[str] = None

@@ -13,6 +13,8 @@ def make_job(**overrides):
         exec_host=None,
         nodes=None,
         resources_requested={},
+        eligible_duration=None,
+        eligible_start_time=None,
     )
     return Job(**(defaults | overrides))
 
