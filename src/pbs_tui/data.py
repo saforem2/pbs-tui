@@ -23,6 +23,8 @@ class Job:
     queue_time: Optional[datetime] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+    eligible_duration: Optional[timedelta] = None
+    eligible_start_time: Optional[datetime] = None
     walltime: Optional[str] = None
     nodes: Optional[str] = None
     estimated_start_time: Optional[datetime] = None

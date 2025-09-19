@@ -7,7 +7,7 @@ import json
 import logging
 import os
 from collections import Counter, defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TypeVar
 from xml.etree import ElementTree as ET
 
@@ -130,6 +130,39 @@ def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def _parse_duration(value: Optional[str]) -> Optional[timedelta]:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    days = 0
+    if "-" in text:
+        day_part, _, remainder = text.partition("-")
+        try:
+            days = int(day_part)
+        except ValueError:
+            return None
+        text = remainder
+    parts = text.split(":")
+    try:
+        if len(parts) == 1:
+            hours = int(parts[0])
+            minutes = 0
+            seconds = 0
+        elif len(parts) == 2:
+            hours, minutes = (int(part) for part in parts)
+            seconds = 0
+        elif len(parts) == 3:
+            hours, minutes, seconds = (int(part) for part in parts)
+        else:
+            return None
+    except ValueError:
+        return None
+    total_seconds = seconds + minutes * 60 + hours * 3600 + days * 86400
+    return timedelta(seconds=total_seconds)
 
 
 def _collect_child_text(element: Optional[ET.Element]) -> Dict[str, str]:
@@ -534,6 +567,18 @@ class PBSDataFetcher:
             or mapping.get("est_start_time")
         )
 
+        eligible_duration = _parse_duration(
+            mapping.get("eligible_time")
+            or mapping.get("EligibleTime")
+            or mapping.get("eligible.time")
+        )
+
+        eligible_start = _parse_timestamp(
+            mapping.get("etime")
+            or mapping.get("eligible_start_time")
+            or mapping.get("eligible.start_time")
+        )
+
         job = Job(
             id=job_id.strip(),
             name=(mapping.get("Job_Name") or mapping.get("Job Name") or "").strip(),
@@ -553,6 +598,8 @@ class PBSDataFetcher:
                 or mapping.get("starttime")
             ),
             end_time=_parse_timestamp(mapping.get("comp_time") or mapping.get("mtime")),
+            eligible_duration=eligible_duration,
+            eligible_start_time=eligible_start,
             walltime=resources_requested.get("walltime")
             or mapping.get("walltime")
             or mapping.get("resources_default.walltime"),
