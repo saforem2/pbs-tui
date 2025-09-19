@@ -504,6 +504,36 @@ class PBSDataFetcher:
         if not exit_status:
             exit_status = None
 
+        account_raw = (
+            mapping.get("Account_Name")
+            or mapping.get("account")
+            or mapping.get("Account")
+            or mapping.get("acct")
+            or mapping.get("acct_name")
+            or mapping.get("project")
+            or mapping.get("Project")
+        )
+        account = account_raw.strip() if account_raw else None
+        if account == "":
+            account = None
+
+        score = _parse_int(
+            mapping.get("Priority")
+            or mapping.get("priority")
+            or mapping.get("schpriority")
+            or mapping.get("job_priority")
+            or mapping.get("pbs_priority")
+        )
+
+        queue_time = _parse_timestamp(mapping.get("qtime") or mapping.get("queue_time"))
+
+        estimated_start = _parse_timestamp(
+            mapping.get("estimated.start_time")
+            or mapping.get("estimated.starttime")
+            or mapping.get("estimated_start_time")
+            or mapping.get("est_start_time")
+        )
+
         job = Job(
             id=job_id.strip(),
             name=(mapping.get("Job_Name") or mapping.get("Job Name") or "").strip(),
@@ -513,18 +543,21 @@ class PBSDataFetcher:
             queue=(mapping.get("queue") or mapping.get("Queue") or "").strip(),
             state=(mapping.get("job_state") or mapping.get("jobstate") or "").strip(),
             exec_host=(mapping.get("exec_host") or mapping.get("exec_host2") or "").strip() or None,
+            account=account,
+            score=score,
             create_time=_parse_timestamp(mapping.get("ctime")),
+            queue_time=queue_time,
             start_time=_parse_timestamp(
                 mapping.get("start_time")
                 or mapping.get("stime")
-                or mapping.get("etime")
-                or mapping.get("qtime")
+                or mapping.get("starttime")
             ),
             end_time=_parse_timestamp(mapping.get("comp_time") or mapping.get("mtime")),
             walltime=resources_requested.get("walltime")
             or mapping.get("walltime")
             or mapping.get("resources_default.walltime"),
             nodes=resources_requested.get("nodes") or mapping.get("nodes"),
+            estimated_start_time=estimated_start,
             resources_requested=resources_requested,
             resources_used=resources_used,
             comment=comment,

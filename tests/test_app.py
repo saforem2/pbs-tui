@@ -56,16 +56,16 @@ def _assert_snapshot_row(
     rendered: str,
     job_id: str,
     *,
-    node_count: str,
-    first_node: str,
+    nodes: str,
+    location: str,
 ) -> None:
     markdown_cells = _find_markdown_row(markdown, job_id)
-    assert markdown_cells["Node Count"] == node_count
-    assert markdown_cells["First Node"] == first_node
+    assert markdown_cells["Nodes"] == nodes
+    assert markdown_cells["Location/Comments"] == location
 
     table_cells = _find_rich_row(rendered, job_id)
-    assert table_cells["Node Count"] == node_count
-    assert table_cells["First Node"] == first_node
+    assert table_cells["Nodes"] == nodes
+    assert table_cells["Location/Comments"] == location
 
 
 def test_env_flag_truthy(monkeypatch):
@@ -360,13 +360,13 @@ def test_snapshot_outputs_handle_job_without_nodes():
 
     markdown = snapshot_to_markdown(snapshot)
     table = snapshot_to_table(snapshot)
-    console = Console(record=True, width=120)
+    console = Console(record=True, width=240)
     console.print(table)
     rendered = console.export_text()
 
-    _assert_snapshot_row(markdown, rendered, "no_nodes", node_count="-", first_node="-")
+    _assert_snapshot_row(markdown, rendered, "no_nodes", nodes="-", location="-")
     _assert_snapshot_row(
-        markdown, rendered, "resource_only", node_count="2", first_node="-"
+        markdown, rendered, "resource_only", nodes="2", location="-"
     )
 
 
@@ -385,12 +385,12 @@ def test_snapshot_outputs_handle_malformed_resource_specs():
 
     markdown = snapshot_to_markdown(snapshot)
     table = snapshot_to_table(snapshot)
-    console = Console(record=True, width=120)
+    console = Console(record=True, width=240)
     console.print(table)
     rendered = console.export_text()
 
-    _assert_snapshot_row(markdown, rendered, "malformed_1", node_count="1", first_node="-")
-    _assert_snapshot_row(markdown, rendered, "malformed_2", node_count="-", first_node="-")
-    _assert_snapshot_row(markdown, rendered, "malformed_3", node_count="-", first_node="-")
+    _assert_snapshot_row(markdown, rendered, "malformed_1", nodes="1", location="-")
+    _assert_snapshot_row(markdown, rendered, "malformed_2", nodes="-", location="-")
+    _assert_snapshot_row(markdown, rendered, "malformed_3", nodes="-", location="-")
 
 

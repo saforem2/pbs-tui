@@ -78,6 +78,61 @@ def _format_duration(duration: Optional[timedelta]) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
+def _parse_walltime(value: Optional[str]) -> Optional[timedelta]:
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    days = 0
+    if "-" in text:
+        day_part, _, remainder = text.partition("-")
+        try:
+            days = int(day_part)
+        except ValueError:
+            return None
+        text = remainder
+    parts = text.split(":")
+    try:
+        if len(parts) == 1:
+            hours = int(parts[0])
+            minutes = 0
+            seconds = 0
+        elif len(parts) == 2:
+            hours, minutes = (int(part) for part in parts)
+            seconds = 0
+        elif len(parts) == 3:
+            hours, minutes, seconds = (int(part) for part in parts)
+        else:
+            return None
+    except ValueError:
+        return None
+    total_seconds = seconds + minutes * 60 + hours * 3600 + days * 86400
+    return timedelta(seconds=total_seconds)
+
+
+def _clamp_duration(duration: Optional[timedelta]) -> Optional[timedelta]:
+    if duration is None:
+        return None
+    if duration.total_seconds() < 0:
+        return timedelta(0)
+    return duration
+
+
+def _duration_between(
+    start: Optional[datetime], end: Optional[datetime]
+) -> Optional[timedelta]:
+    if start is None or end is None:
+        return None
+    start_dt = start
+    end_dt = end
+    if start_dt.tzinfo is not None and end_dt.tzinfo is None:
+        end_dt = end_dt.replace(tzinfo=start_dt.tzinfo)
+    elif start_dt.tzinfo is None and end_dt.tzinfo is not None:
+        start_dt = start_dt.replace(tzinfo=end_dt.tzinfo)
+    return end_dt - start_dt
+
+
 def _format_datetime(value: Optional[datetime]) -> str:
     if value is None:
         return "-"
@@ -121,18 +176,37 @@ def format_job_table_cells(job: Job, reference_time: datetime) -> dict[str, Opti
     """Return column-keyed cell values for job table renderers."""
 
     node_count, first_node = job_node_summary(job)
-    runtime = _format_duration(job.runtime(reference_time))
+    walltime = job.walltime or job.resources_requested.get("walltime")
+    walltime_duration = _parse_walltime(walltime)
+    runtime_duration = job.runtime(reference_time)
+
+    queue_start = job.queue_time or job.create_time
+    queue_end = reference_time
+    if job.start_time and job.state in {"R", "F"}:
+        queue_end = job.start_time
+    queued_duration = _duration_between(queue_start, queue_end)
+
+    time_remaining: Optional[timedelta] = None
+    if walltime_duration is not None and runtime_duration is not None:
+        time_remaining = walltime_duration - runtime_duration
+
+    location = job.comment or first_node
+
     raw_values: dict[str, Optional[str]] = {
-        "Job ID": job.id,
-        "Name": job.name,
+        "#JobId": job.id,
         "User": job.user,
+        "Account": job.account,
+        "Score": str(job.score) if job.score is not None else None,
+        "WallTime": walltime,
+        "QueuedTime": _format_duration(_clamp_duration(queued_duration)),
+        "EstStart": _format_datetime(job.estimated_start_time),
+        "RunTime": _format_duration(runtime_duration),
+        "TimeRemaining": _format_duration(_clamp_duration(time_remaining)),
+        "Nodes": str(node_count) if node_count is not None else None,
         "Queue": job.queue,
         "State": JOB_STATE_LABELS.get(job.state, job.state),
-        "Nodes": job.nodes,
-        "Node Count": str(node_count) if node_count is not None else None,
-        "First Node": first_node,
-        "Walltime": job.walltime,
-        "Runtime": runtime,
+        "JobName": job.name,
+        "Location/Comments": location,
     }
     ordered = {label: raw_values[label] for label, _ in JOB_TABLE_COLUMNS}
     assert len(ordered) == len(JOB_TABLE_COLUMNS), "job table cells must match column metadata"
