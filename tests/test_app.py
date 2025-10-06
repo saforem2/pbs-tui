@@ -39,16 +39,39 @@ def _row_from_markdown(line: str) -> dict[str, str]:
     return dict(zip(COLUMN_NAMES, cells))
 
 
-def _find_markdown_row(markdown: str, job_id: str) -> dict[str, str]:
-    row = next((line for line in markdown.splitlines() if f"| {job_id} |" in line), None)
-    assert row is not None, f"Expected markdown row for job {job_id}"
-    return _row_from_markdown(row)
+def _markdown_rows(markdown: str) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for line in markdown.splitlines():
+        if not line.startswith("|") or "---" in line:
+            continue
+        row = _row_from_markdown(line)
+        if row[COLUMN_NAMES[0]] == COLUMN_NAMES[0]:
+            continue
+        rows.append(row)
+    return rows
 
 
-def _find_rich_row(rendered: str, job_id: str) -> dict[str, str]:
-    row = next((line for line in rendered.splitlines() if job_id in line), None)
-    assert row is not None, f"Expected rich row for job {job_id}"
-    return _row_from_rich(row)
+def _rich_rows(rendered: str) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for line in rendered.splitlines():
+        if not line.strip() or "Source:" in line:
+            continue
+        try:
+            row = _row_from_rich(line)
+        except AssertionError:
+            continue
+        if row[COLUMN_NAMES[0]] == COLUMN_NAMES[0]:
+            continue
+        rows.append(row)
+    return rows
+
+
+def _find_markdown_row(markdown: str, job_id: str) -> tuple[dict[str, str], int]:
+    lookup = job_id.split(".", 1)[0]
+    for index, row in enumerate(_markdown_rows(markdown)):
+        if row[COLUMN_NAMES[0]] == lookup:
+            return row, index
+    raise AssertionError(f"Expected markdown row for job {job_id}")
 
 
 def _assert_snapshot_row(
@@ -56,16 +79,14 @@ def _assert_snapshot_row(
     rendered: str,
     job_id: str,
     *,
-    node_count: str,
-    first_node: str,
+    nodes: str,
 ) -> None:
-    markdown_cells = _find_markdown_row(markdown, job_id)
-    assert markdown_cells["Node Count"] == node_count
-    assert markdown_cells["First Node"] == first_node
+    markdown_cells, index = _find_markdown_row(markdown, job_id)
+    assert markdown_cells["Nodes"] == nodes
 
-    table_cells = _find_rich_row(rendered, job_id)
-    assert table_cells["Node Count"] == node_count
-    assert table_cells["First Node"] == first_node
+    rich_rows = _rich_rows(rendered)
+    assert index < len(rich_rows), f"Expected rich row for job {job_id}"
+    assert rich_rows[index]["Nodes"] == nodes
 
 
 def test_env_flag_truthy(monkeypatch):
@@ -364,10 +385,8 @@ def test_snapshot_outputs_handle_job_without_nodes():
     console.print(table)
     rendered = console.export_text()
 
-    _assert_snapshot_row(markdown, rendered, "no_nodes", node_count="-", first_node="-")
-    _assert_snapshot_row(
-        markdown, rendered, "resource_only", node_count="2", first_node="-"
-    )
+    _assert_snapshot_row(markdown, rendered, "no_nodes", nodes="-")
+    _assert_snapshot_row(markdown, rendered, "resource_only", nodes="2")
 
 
 def test_snapshot_outputs_handle_malformed_resource_specs():
@@ -389,8 +408,8 @@ def test_snapshot_outputs_handle_malformed_resource_specs():
     console.print(table)
     rendered = console.export_text()
 
-    _assert_snapshot_row(markdown, rendered, "malformed_1", node_count="1", first_node="-")
-    _assert_snapshot_row(markdown, rendered, "malformed_2", node_count="-", first_node="-")
-    _assert_snapshot_row(markdown, rendered, "malformed_3", node_count="-", first_node="-")
+    _assert_snapshot_row(markdown, rendered, "malformed_1", nodes="1")
+    _assert_snapshot_row(markdown, rendered, "malformed_2", nodes="-")
+    _assert_snapshot_row(markdown, rendered, "malformed_3", nodes="-")
 
 

@@ -99,6 +99,77 @@ def _format_datetime(value: Optional[datetime]) -> str:
     except ValueError:
         normalized = value
     return normalized.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def _parse_duration_spec(value: Optional[str]) -> Optional[timedelta]:
+    if value is None:
+        return None
+    spec = value.strip()
+    if not spec:
+        return None
+    days = 0
+    time_part = spec
+    if "-" in spec:
+        day_part, remainder = spec.split("-", 1)
+        try:
+            days = int(day_part)
+        except ValueError:
+            return None
+        time_part = remainder
+    parts = time_part.split(":")
+    try:
+        units = [int(part) for part in parts]
+    except ValueError:
+        return None
+    if len(units) > 4:
+        return None
+    if len(units) == 4:
+        days += units[0]
+        hours, minutes, seconds = units[1:]
+    elif len(units) == 3:
+        hours, minutes, seconds = units
+    elif len(units) == 2:
+        hours, minutes, seconds = 0, units[0], units[1]
+    elif len(units) == 1:
+        hours, minutes, seconds = 0, 0, units[0]
+    else:
+        return None
+    return timedelta(days=days, hours=hours, minutes=minutes, seconds=seconds)
+
+
+def _job_runtime_delta(job: Job, reference_time: datetime) -> Optional[timedelta]:
+    runtime_reference = job.end_time or reference_time
+    return job.runtime(runtime_reference)
+
+
+def _job_queue_duration(job: Job, reference_time: datetime) -> Optional[timedelta]:
+    start = job.queue_time or job.create_time
+    if start is None:
+        return None
+    end = job.start_time or reference_time
+    if start.tzinfo and not end.tzinfo:
+        end = end.replace(tzinfo=start.tzinfo)
+    elif end.tzinfo and not start.tzinfo:
+        start = start.replace(tzinfo=end.tzinfo)
+    delta = end - start
+    if delta.total_seconds() < 0:
+        return timedelta(seconds=0)
+    return delta
+
+
+def _job_time_remaining(
+    job: Job, reference_time: datetime, runtime: Optional[timedelta] = None
+) -> Optional[timedelta]:
+    walltime = _parse_duration_spec(job.walltime)
+    if walltime is None:
+        return None
+    runtime = runtime if runtime is not None else _job_runtime_delta(job, reference_time)
+    if runtime is None:
+        return walltime
+    remaining = walltime - runtime
+    if remaining.total_seconds() < 0:
+        return timedelta(seconds=0)
+    return remaining
 def job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
     """Return a heuristic ``(node_count, first_node)`` tuple for *job*.
 
@@ -130,18 +201,29 @@ def format_job_table_cells(job: Job, reference_time: datetime) -> dict[str, Opti
     """Return column-keyed cell values for job table renderers."""
 
     node_count, first_node = job_node_summary(job)
-    runtime = _format_duration(job.runtime(reference_time))
+    runtime_delta = _job_runtime_delta(job, reference_time)
+    queued_duration = _job_queue_duration(job, reference_time)
+    time_remaining = _job_time_remaining(job, reference_time, runtime_delta)
+    est_start = job.estimated_start_time or job.start_time
+    if node_count is not None and first_node:
+        nodes_display = f"{node_count} ({first_node})"
+    elif node_count is not None:
+        nodes_display = str(node_count)
+    else:
+        nodes_display = first_node
     raw_values: dict[str, Optional[str]] = {
-        "Job ID": job.id.split(".", 1)[0],
-        "Name": job.name,
+        "#JobId": job.id.split(".", 1)[0],
         "User": job.user,
-        "Queue": job.queue,
+        "Account": job.account,
+        "JobName": job.name,
+        "WallTime": job.walltime,
+        "QueuedTime": _format_duration(queued_duration),
+        "EstStart": _format_datetime(est_start),
+        "RunTime": _format_duration(runtime_delta),
+        "TimeRemaining": _format_duration(time_remaining),
+        "Nodes": nodes_display,
         "State": JOB_STATE_LABELS.get(job.state, job.state),
-        "Nodes": job.nodes,
-        "Node Count": str(node_count) if node_count is not None else None,
-        "First Node": first_node,
-        "Walltime": job.walltime,
-        "Runtime": runtime,
+        "Queue": job.queue,
     }
     ordered = {label: raw_values[label] for label, _ in JOB_TABLE_COLUMNS}
     assert len(ordered) == len(JOB_TABLE_COLUMNS), "job table cells must match column metadata"
@@ -220,32 +302,72 @@ class DetailPanel(Static):
     """Show details for the currently selected object."""
 
     def show_job(self, job: Job, *, reference_time: Optional[datetime] = None) -> None:
+        effective_reference = reference_time or datetime.now(timezone.utc)
+        runtime_delta = _job_runtime_delta(job, effective_reference)
+        queued_duration = _job_queue_duration(job, effective_reference)
+        remaining = _job_time_remaining(job, effective_reference, runtime_delta)
+        node_count, first_node = job_node_summary(job)
+
         table = Table.grid(padding=(0, 1))
         table.add_column(style="bold cyan", justify="right")
         table.add_column(justify="left")
-        table.add_row("Job ID", job.id)
-        table.add_row("Name", job.name)
-        table.add_row("User", job.user)
-        table.add_row("Queue", job.queue)
-        table.add_row("State", JOB_STATE_LABELS.get(job.state, job.state))
-        table.add_row("Exec host", job.exec_host or "-")
-        table.add_row("Submitted", _format_datetime(job.create_time))
-        table.add_row("Started", _format_datetime(job.start_time))
-        table.add_row("Finished", _format_datetime(job.end_time))
-        table.add_row("Runtime", _format_duration(job.runtime(reference_time)))
-        table.add_row(
-            "Requested",
-            ", ".join(f"{k}={v}" for k, v in sorted(job.resources_requested.items())) or "-",
-        )
-        if job.resources_used:
-            table.add_row(
-                "Used",
-                ", ".join(f"{k}={v}" for k, v in sorted(job.resources_used.items())),
+
+        def add_row(label: str, value: Optional[str]) -> None:
+            if value is None:
+                display = "-"
+            else:
+                display = value if value.strip() else "-"
+            table.add_row(label, display)
+
+        add_row("Job ID", job.id)
+        add_row("Job name", job.name)
+        add_row("User", job.user)
+        add_row("Account", job.account)
+        add_row("Queue", job.queue)
+        add_row("State", JOB_STATE_LABELS.get(job.state, job.state))
+        add_row("Exec host", job.exec_host)
+
+        summary_parts: list[str] = []
+        if node_count is not None:
+            label = "node" if node_count == 1 else "nodes"
+            summary_parts.append(f"{node_count} {label}")
+        if first_node:
+            summary_parts.append(f"first: {first_node}")
+        add_row("Node summary", ", ".join(summary_parts) if summary_parts else None)
+
+        add_row("Requested nodes", job.nodes)
+        add_row("Walltime", job.walltime)
+        add_row("Runtime", _format_duration(runtime_delta))
+        add_row("Time remaining", _format_duration(remaining))
+        add_row("Queued time", _format_duration(queued_duration))
+        add_row("Submitted", _format_datetime(job.create_time))
+        add_row("Queue time", _format_datetime(job.queue_time))
+        add_row("Eligible", _format_datetime(job.eligible_time))
+        add_row("Estimated start", _format_datetime(job.estimated_start_time))
+        add_row("Started", _format_datetime(job.start_time))
+        add_row("Finished", _format_datetime(job.end_time))
+
+        location_parts: list[str] = []
+        if job.location:
+            location_parts.append(job.location)
+        if job.comment:
+            location_parts.append(job.comment)
+        location_text = "\n".join(location_parts) if location_parts else None
+        add_row("Location / Comments", location_text)
+
+        add_row("Exit status", job.exit_status)
+
+        if job.resources_requested:
+            requested = ", ".join(
+                f"{key}={value}" for key, value in sorted(job.resources_requested.items())
             )
-        table.add_row("Walltime", job.walltime or "-")
-        table.add_row("Nodes", job.nodes or "-")
-        table.add_row("Comment", job.comment or "-")
-        table.add_row("Exit status", job.exit_status or "-")
+            add_row("Resources requested", requested)
+        if job.resources_used:
+            used = ", ".join(
+                f"{key}={value}" for key, value in sorted(job.resources_used.items())
+            )
+            add_row("Resources used", used)
+
         self.update(Panel(table, title=f"Job {job.id}", border_style="cyan"))
 
     def show_node(self, node: Node) -> None:

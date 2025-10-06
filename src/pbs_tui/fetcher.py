@@ -132,6 +132,13 @@ def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _clean_str(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
 def _collect_child_text(element: Optional[ET.Element]) -> Dict[str, str]:
     result: Dict[str, str] = {}
     if element is None:
@@ -322,13 +329,24 @@ class PBSDataFetcher:
                 queue=job_el.findtext("queue", "").strip(),
                 state=job_el.findtext("job_state", "").strip(),
                 exec_host=(job_el.findtext("exec_host") or "").strip() or None,
+                account=_clean_str(
+                    job_el.findtext("Account_Name")
+                    or job_el.findtext("account")
+                    or job_el.findtext("Account")
+                ),
                 create_time=_parse_timestamp(job_el.findtext("ctime")),
+                queue_time=_parse_timestamp(job_el.findtext("qtime")),
+                eligible_time=_parse_timestamp(job_el.findtext("etime")),
                 start_time=_parse_timestamp(
                     job_el.findtext("start_time")
                     or job_el.findtext("stime")
-                    or job_el.findtext("etime")
                 ),
                 end_time=_parse_timestamp(job_el.findtext("comp_time") or job_el.findtext("mtime")),
+                estimated_start_time=_parse_timestamp(
+                    job_el.findtext("estimated.start_time")
+                    or job_el.findtext("estimated_start_time")
+                    or job_el.findtext("estimatedStartTime")
+                ),
                 walltime=(
                     job_el.findtext("Resource_List/walltime")
                     or job_el.findtext("resources_default/walltime")
@@ -336,8 +354,9 @@ class PBSDataFetcher:
                 nodes=job_el.findtext("Resource_List/nodes"),
                 resources_requested=_collect_child_text(job_el.find("Resource_List")),
                 resources_used=_collect_child_text(job_el.find("resources_used")),
-                comment=(job_el.findtext("comment") or job_el.findtext("sched_comment")),
-                exit_status=job_el.findtext("Exit_status"),
+                comment=_clean_str(job_el.findtext("comment") or job_el.findtext("sched_comment")),
+                location=_clean_str(job_el.findtext("job_location") or job_el.findtext("location")),
+                exit_status=_clean_str(job_el.findtext("Exit_status")),
             )
             jobs.append(job)
         return jobs
@@ -496,13 +515,36 @@ class PBSDataFetcher:
             if key.startswith("resources_used.") and "." in key
         }
 
-        comment = (mapping.get("comment") or mapping.get("sched_comment") or "").strip()
-        if not comment:
-            comment = None
+        comment = _clean_str(mapping.get("comment") or mapping.get("sched_comment"))
 
-        exit_status = (mapping.get("Exit_status") or mapping.get("exit_status") or "").strip()
-        if not exit_status:
-            exit_status = None
+        exit_status = _clean_str(mapping.get("Exit_status") or mapping.get("exit_status"))
+
+        account = _clean_str(
+            mapping.get("Account_Name")
+            or mapping.get("account")
+            or mapping.get("Account")
+            or mapping.get("project")
+        )
+
+        queue_time = _parse_timestamp(
+            mapping.get("qtime") or mapping.get("queue_time") or mapping.get("Queue_Time")
+        )
+
+        eligible_time = _parse_timestamp(mapping.get("etime") or mapping.get("eligible_time"))
+
+        estimated_start_time = _parse_timestamp(
+            mapping.get("estimated.start_time")
+            or mapping.get("Estimated.StartTime")
+            or mapping.get("estimated_start_time")
+            or mapping.get("estimated.starttime")
+        )
+
+        location = _clean_str(
+            mapping.get("job_location")
+            or mapping.get("Job_Location")
+            or mapping.get("location")
+            or mapping.get("Location")
+        )
 
         job = Job(
             id=job_id.strip(),
@@ -513,14 +555,16 @@ class PBSDataFetcher:
             queue=(mapping.get("queue") or mapping.get("Queue") or "").strip(),
             state=(mapping.get("job_state") or mapping.get("jobstate") or "").strip(),
             exec_host=(mapping.get("exec_host") or mapping.get("exec_host2") or "").strip() or None,
+            account=account,
             create_time=_parse_timestamp(mapping.get("ctime")),
+            queue_time=queue_time,
+            eligible_time=eligible_time,
             start_time=_parse_timestamp(
                 mapping.get("start_time")
                 or mapping.get("stime")
-                or mapping.get("etime")
-                or mapping.get("qtime")
             ),
             end_time=_parse_timestamp(mapping.get("comp_time") or mapping.get("mtime")),
+            estimated_start_time=estimated_start_time,
             walltime=resources_requested.get("walltime")
             or mapping.get("walltime")
             or mapping.get("resources_default.walltime"),
@@ -528,6 +572,7 @@ class PBSDataFetcher:
             resources_requested=resources_requested,
             resources_used=resources_used,
             comment=comment,
+            location=location,
             exit_status=exit_status,
         )
         return job
