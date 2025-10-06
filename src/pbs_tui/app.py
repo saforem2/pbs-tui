@@ -30,8 +30,12 @@ from textual.widgets import (
     TabPane,
     TabbedContent,
 )
-from textual.theme import Theme
 from textual.pilot import Pilot
+
+try:  # Textual < 0.47 does not expose the Theme helper
+    from textual.theme import Theme as _TextualTheme
+except Exception:  # pragma: no cover - defensive fallback for older installs
+    _TextualTheme = None
 
 from .data import Job, Node, Queue, SchedulerSnapshot
 from .fetcher import PBSDataFetcher
@@ -47,6 +51,8 @@ from .ui_config import JOB_TABLE_COLUMNS
 _TEXTUAL_APP_MODULE = importlib.import_module("textual.app")
 _SYSTEM_COMMAND_CLS = getattr(_TEXTUAL_APP_MODULE, "SystemCommand", None)
 
+HAS_TEXTUAL_THEME_SUPPORT = _TextualTheme is not None
+
 JOB_STATE_LABELS = {
     "B": "Begun",
     "E": "Exiting",
@@ -60,37 +66,41 @@ JOB_STATE_LABELS = {
 }
 
 
-PBS_DARK_THEME = Theme(
-    "pbs-dark",
-    primary="#4DB2FF",
-    secondary="#89DDFF",
-    warning="#F9E2AF",
-    error="#F38BA8",
-    success="#94E2D5",
-    accent="#F8BD96",
-    foreground="#E6EEF8",
-    background="#0B1220",
-    surface="#141B2D",
-    panel="#141B2D",
-    boost="#CBA6F7",
-    dark=True,
-)
+if HAS_TEXTUAL_THEME_SUPPORT:
+    PBS_DARK_THEME = _TextualTheme(
+        "pbs-dark",
+        primary="#4DB2FF",
+        secondary="#89DDFF",
+        warning="#F9E2AF",
+        error="#F38BA8",
+        success="#94E2D5",
+        accent="#F8BD96",
+        foreground="#E6EEF8",
+        background="#0B1220",
+        surface="#141B2D",
+        panel="#141B2D",
+        boost="#CBA6F7",
+        dark=True,
+    )
 
-PBS_LIGHT_THEME = Theme(
-    "pbs-light",
-    primary="#1F5BA5",
-    secondary="#0284C7",
-    warning="#D97706",
-    error="#B91C1C",
-    success="#15803D",
-    accent="#7C3AED",
-    foreground="#172033",
-    background="#F3F7FD",
-    surface="#FFFFFF",
-    panel="#FFFFFF",
-    boost="#4338CA",
-    dark=False,
-)
+    PBS_LIGHT_THEME = _TextualTheme(
+        "pbs-light",
+        primary="#1F5BA5",
+        secondary="#0284C7",
+        warning="#D97706",
+        error="#B91C1C",
+        success="#15803D",
+        accent="#7C3AED",
+        foreground="#172033",
+        background="#F3F7FD",
+        surface="#FFFFFF",
+        panel="#FFFFFF",
+        boost="#4338CA",
+        dark=False,
+    )
+else:  # pragma: no cover - legacy Textual without Theme helper
+    PBS_DARK_THEME = None
+    PBS_LIGHT_THEME = None
 
 
 
@@ -623,9 +633,10 @@ class PBSTUI(App[None]):
         refresh_interval: float = 30.0,
     ) -> None:
         super().__init__()
-        self.register_theme(PBS_DARK_THEME)
-        self.register_theme(PBS_LIGHT_THEME)
-        self.theme = PBS_DARK_THEME.name
+        if HAS_TEXTUAL_THEME_SUPPORT and PBS_DARK_THEME and PBS_LIGHT_THEME:
+            self.register_theme(PBS_DARK_THEME)
+            self.register_theme(PBS_LIGHT_THEME)
+            self.theme = PBS_DARK_THEME.name
         self.fetcher = fetcher or PBSDataFetcher()
         self.refresh_interval = refresh_interval
         self._snapshot: Optional[SchedulerSnapshot] = None

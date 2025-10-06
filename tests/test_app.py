@@ -14,6 +14,7 @@ from pbs_tui.app import (
     DetailPanel,
     JobsTable,
     PBSTUI,
+    HAS_TEXTUAL_THEME_SUPPORT,
     _env_flag,
     format_job_table_cells,
     run,
@@ -146,6 +147,10 @@ def test_format_job_table_cells_matches_columns():
     assert list(cells.keys()) == [label for label, _ in JOB_TABLE_COLUMNS]
 
 
+@pytest.mark.skipif(
+    not HAS_TEXTUAL_THEME_SUPPORT,
+    reason="Textual installation does not expose custom theme support",
+)
 def test_app_registers_custom_themes():
     app = PBSTUI()
     assert "pbs-dark" in app.available_themes
