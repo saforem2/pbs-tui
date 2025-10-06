@@ -36,7 +36,6 @@ DataTable {
 #jobs_tab_content {
     layout: vertical;
     height: 1fr;
-    gap: 1;
     padding: 1;
 }
 
@@ -46,6 +45,7 @@ DataTable {
 
 #jobs_filter {
     dock: top;
+    margin-bottom: 1;
 }
 
 #details {
