@@ -33,12 +33,34 @@ DataTable {
     height: 1fr;
 }
 
+#jobs_tab_content {
+    layout: vertical;
+    height: 1fr;
+    padding: 1;
+}
+
+#jobs_tab_content DataTable {
+    height: 1fr;
+}
+
+#jobs_filter {
+    dock: top;
+    margin-bottom: 1;
+}
+
 #details {
     width: 2fr;
     height: 1fr;
     border: tall $surface;
     padding: 1 2;
     margin-left: 1;
+    overflow-x: auto;
+    overflow-y: auto;
+}
+
+#help_panel {
+    padding: 1 2;
+    overflow-y: auto;
 }
 
 #status {

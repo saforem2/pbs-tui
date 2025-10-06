@@ -1,13 +1,20 @@
+from collections import deque
 from datetime import datetime, timezone
 
 import re
 
+import asyncio
+
 import pytest
+from textual.widgets import DataTable
 
 from rich.console import Console
 
 from pbs_tui.app import (
+    DetailPanel,
+    JobsTable,
     PBSTUI,
+    HAS_TEXTUAL_THEME_SUPPORT,
     _env_flag,
     format_job_table_cells,
     run,
@@ -27,6 +34,14 @@ NOW = datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc)
 COLUMN_NAMES = [name for name, _ in JOB_TABLE_COLUMNS]
 
 
+def _job_table_display_id(job_id: str) -> str:
+    trimmed = job_id.strip()
+    head, separator, tail = trimmed.partition(".")
+    if not separator or not head or not tail:
+        return trimmed
+    return head
+
+
 def _row_from_rich(line: str) -> dict[str, str]:
     cells = [cell.strip() for cell in re.split(r"\s{2,}", line.strip()) if cell.strip()]
     assert len(cells) == len(COLUMN_NAMES), f"Unexpected cell count in line: {line}"
@@ -39,16 +54,39 @@ def _row_from_markdown(line: str) -> dict[str, str]:
     return dict(zip(COLUMN_NAMES, cells))
 
 
-def _find_markdown_row(markdown: str, job_id: str) -> dict[str, str]:
-    row = next((line for line in markdown.splitlines() if f"| {job_id} |" in line), None)
-    assert row is not None, f"Expected markdown row for job {job_id}"
-    return _row_from_markdown(row)
+def _markdown_rows(markdown: str) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for line in markdown.splitlines():
+        if not line.startswith("|") or "---" in line:
+            continue
+        row = _row_from_markdown(line)
+        if row[COLUMN_NAMES[0]] == COLUMN_NAMES[0]:
+            continue
+        rows.append(row)
+    return rows
 
 
-def _find_rich_row(rendered: str, job_id: str) -> dict[str, str]:
-    row = next((line for line in rendered.splitlines() if job_id in line), None)
-    assert row is not None, f"Expected rich row for job {job_id}"
-    return _row_from_rich(row)
+def _rich_rows(rendered: str) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for line in rendered.splitlines():
+        if not line.strip() or "Source:" in line:
+            continue
+        try:
+            row = _row_from_rich(line)
+        except AssertionError:
+            continue
+        if row[COLUMN_NAMES[0]] == COLUMN_NAMES[0]:
+            continue
+        rows.append(row)
+    return rows
+
+
+def _find_markdown_row(markdown: str, job_id: str) -> tuple[dict[str, str], int]:
+    lookup = _job_table_display_id(job_id)
+    for index, row in enumerate(_markdown_rows(markdown)):
+        if row[COLUMN_NAMES[0]] == lookup:
+            return row, index
+    raise AssertionError(f"Expected markdown row for job {job_id}")
 
 
 def _assert_snapshot_row(
@@ -56,16 +94,14 @@ def _assert_snapshot_row(
     rendered: str,
     job_id: str,
     *,
-    node_count: str,
-    first_node: str,
+    nodes: str,
 ) -> None:
-    markdown_cells = _find_markdown_row(markdown, job_id)
-    assert markdown_cells["Node Count"] == node_count
-    assert markdown_cells["First Node"] == first_node
+    markdown_cells, index = _find_markdown_row(markdown, job_id)
+    assert markdown_cells["Nodes"] == nodes
 
-    table_cells = _find_rich_row(rendered, job_id)
-    assert table_cells["Node Count"] == node_count
-    assert table_cells["First Node"] == first_node
+    rich_rows = _rich_rows(rendered)
+    assert index < len(rich_rows), f"Expected rich row for job {job_id}"
+    assert rich_rows[index]["Nodes"] == nodes
 
 
 def test_env_flag_truthy(monkeypatch):
@@ -117,6 +153,40 @@ def test_format_job_table_cells_matches_columns():
     job = make_job()
     cells = format_job_table_cells(job, NOW)
     assert list(cells.keys()) == [label for label, _ in JOB_TABLE_COLUMNS]
+
+
+def test_format_job_table_cells_truncates_job_id_suffix():
+    job = make_job(id="123.server")
+    cells = format_job_table_cells(job, NOW)
+    assert cells["#JobId"] == "123"
+
+
+def test_format_job_table_cells_preserves_unexpected_job_id_formats():
+    job = make_job(id="job-without-suffix")
+    cells = format_job_table_cells(job, NOW)
+    assert cells["#JobId"] == "job-without-suffix"
+
+    dotted_job = make_job(id=".leadingdot")
+    dotted_cells = format_job_table_cells(dotted_job, NOW)
+    assert dotted_cells["#JobId"] == ".leadingdot"
+
+
+@pytest.mark.skipif(
+    not HAS_TEXTUAL_THEME_SUPPORT,
+    reason="Textual installation does not expose custom theme support",
+)
+def test_app_registers_custom_themes():
+    app = PBSTUI()
+    assert "pbs-dark" in app.available_themes
+    assert "pbs-light" in app.available_themes
+    assert app.theme == "pbs-dark"
+
+
+def test_detail_toggle_binding_exposed():
+    assert any(
+        binding[1] == "toggle_detail_panel" and binding[0] == "d"
+        for binding in PBSTUI.BINDINGS
+    )
 
 
 # def test_run_inline_displays_sample_job_data(monkeypatch, capsys):
@@ -364,10 +434,8 @@ def test_snapshot_outputs_handle_job_without_nodes():
     console.print(table)
     rendered = console.export_text()
 
-    _assert_snapshot_row(markdown, rendered, "no_nodes", node_count="-", first_node="-")
-    _assert_snapshot_row(
-        markdown, rendered, "resource_only", node_count="2", first_node="-"
-    )
+    _assert_snapshot_row(markdown, rendered, "no_nodes", nodes="-")
+    _assert_snapshot_row(markdown, rendered, "resource_only", nodes="2")
 
 
 def test_snapshot_outputs_handle_malformed_resource_specs():
@@ -389,8 +457,122 @@ def test_snapshot_outputs_handle_malformed_resource_specs():
     console.print(table)
     rendered = console.export_text()
 
-    _assert_snapshot_row(markdown, rendered, "malformed_1", node_count="1", first_node="-")
-    _assert_snapshot_row(markdown, rendered, "malformed_2", node_count="-", first_node="-")
-    _assert_snapshot_row(markdown, rendered, "malformed_3", node_count="-", first_node="-")
+    _assert_snapshot_row(markdown, rendered, "malformed_1", nodes="1")
+    _assert_snapshot_row(markdown, rendered, "malformed_2", nodes="-")
+    _assert_snapshot_row(markdown, rendered, "malformed_3", nodes="-")
 
+
+def test_detail_panel_hidden_until_job_selected():
+    snapshot = sample_snapshot(now=NOW)
+
+    class SingleSnapshotFetcher:
+        async def fetch_snapshot(self):
+            return snapshot
+
+    app = PBSTUI(fetcher=SingleSnapshotFetcher(), refresh_interval=9999)
+
+    async def interact() -> None:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            details = app.query_one(DetailPanel)
+            assert details.display is False
+
+            jobs_table = app.query_one(JobsTable)
+            assert jobs_table.row_count > 0
+
+            first_key = jobs_table.ordered_rows[0].key
+            app.post_message(DataTable.RowSelected(jobs_table, 0, first_key))
+            await pilot.pause()
+
+            assert details.display is True
+            expected_id = str(first_key.value if hasattr(first_key, "value") else first_key)
+            assert app._selected_job_id == expected_id
+
+    asyncio.run(interact())
+
+
+def test_detail_panel_hides_when_selected_job_disappears():
+    snapshot = sample_snapshot(now=NOW)
+
+    empty_snapshot = SchedulerSnapshot(jobs=[], nodes=[], queues=[], source="test")
+
+    class CyclingFetcher:
+        def __init__(self) -> None:
+            self._snapshots = deque((snapshot, empty_snapshot))
+
+        async def fetch_snapshot(self):
+            current = self._snapshots[0]
+            self._snapshots.rotate(-1)
+            return current
+
+    app = PBSTUI(fetcher=CyclingFetcher(), refresh_interval=9999)
+
+    async def interact() -> None:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            jobs_table = app.query_one(JobsTable)
+            assert jobs_table.row_count > 0
+            first_key = jobs_table.ordered_rows[0].key
+            app.post_message(DataTable.RowSelected(jobs_table, 0, first_key))
+            await pilot.pause()
+
+            details = app.query_one(DetailPanel)
+            assert details.display is True
+
+            await app.refresh_data()
+            await pilot.pause()
+
+            assert details.display is False
+            assert app._selected_job_id is None
+
+    asyncio.run(interact())
+
+
+def test_detail_panel_toggle_action_restores_content():
+    snapshot = sample_snapshot(now=NOW)
+
+    class SingleSnapshotFetcher:
+        async def fetch_snapshot(self):
+            return snapshot
+
+    app = PBSTUI(fetcher=SingleSnapshotFetcher(), refresh_interval=9999)
+
+    async def interact() -> None:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            jobs_table = app.query_one(JobsTable)
+            first_key = jobs_table.ordered_rows[0].key
+            app.post_message(DataTable.RowSelected(jobs_table, 0, first_key))
+            await pilot.pause()
+
+            details = app.query_one(DetailPanel)
+            assert details.display is True
+
+            app.action_toggle_detail_panel()
+            await pilot.pause()
+            assert details.display is False
+
+            app.action_toggle_detail_panel()
+            await pilot.pause()
+            assert details.display is True
+
+    asyncio.run(interact())
+
+
+def test_command_palette_includes_detail_toggle():
+    snapshot = sample_snapshot(now=NOW)
+
+    class SingleSnapshotFetcher:
+        async def fetch_snapshot(self):
+            return snapshot
+
+    app = PBSTUI(fetcher=SingleSnapshotFetcher(), refresh_interval=9999)
+
+    async def interact() -> None:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            commands = list(app.get_system_commands(app.screen))
+            assert any(command.title == "Toggle detail panel" for command in commands)
+
+    asyncio.run(interact())
 

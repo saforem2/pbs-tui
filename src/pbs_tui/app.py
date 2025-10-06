@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib
 import os
 import sys
 from collections import Counter
@@ -18,8 +19,23 @@ from rich.table import Table
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import DataTable, Footer, Header, Static, TabPane, TabbedContent
+from textual.screen import Screen
+from textual.widgets import (
+    DataTable,
+    Footer,
+    Header,
+    Input,
+    Markdown,
+    Static,
+    TabPane,
+    TabbedContent,
+)
 from textual.pilot import Pilot
+
+try:  # Textual < 0.47 does not expose the Theme helper
+    from textual.theme import Theme as _TextualTheme
+except Exception:  # pragma: no cover - defensive fallback for older installs
+    _TextualTheme = None
 
 from .data import Job, Node, Queue, SchedulerSnapshot
 from .fetcher import PBSDataFetcher
@@ -30,6 +46,12 @@ from .nodes import (
     parse_node_count_spec,
 )
 from .ui_config import JOB_TABLE_COLUMNS
+
+
+_TEXTUAL_APP_MODULE = importlib.import_module("textual.app")
+_SYSTEM_COMMAND_CLS = getattr(_TEXTUAL_APP_MODULE, "SystemCommand", None)
+
+HAS_TEXTUAL_THEME_SUPPORT = _TextualTheme is not None
 
 JOB_STATE_LABELS = {
     "B": "Begun",
@@ -42,6 +64,43 @@ JOB_STATE_LABELS = {
     "T": "Transit",
     "W": "Waiting",
 }
+
+
+if HAS_TEXTUAL_THEME_SUPPORT:
+    PBS_DARK_THEME = _TextualTheme(
+        "pbs-dark",
+        primary="#4DB2FF",
+        secondary="#89DDFF",
+        warning="#F9E2AF",
+        error="#F38BA8",
+        success="#94E2D5",
+        accent="#F8BD96",
+        foreground="#E6EEF8",
+        background="#0B1220",
+        surface="#141B2D",
+        panel="#141B2D",
+        boost="#CBA6F7",
+        dark=True,
+    )
+
+    PBS_LIGHT_THEME = _TextualTheme(
+        "pbs-light",
+        primary="#1F5BA5",
+        secondary="#0284C7",
+        warning="#D97706",
+        error="#B91C1C",
+        success="#15803D",
+        accent="#7C3AED",
+        foreground="#172033",
+        background="#F3F7FD",
+        surface="#FFFFFF",
+        panel="#FFFFFF",
+        boost="#4338CA",
+        dark=False,
+    )
+else:  # pragma: no cover - legacy Textual without Theme helper
+    PBS_DARK_THEME = None
+    PBS_LIGHT_THEME = None
 
 
 
@@ -90,6 +149,104 @@ def _format_datetime(value: Optional[datetime]) -> str:
     except ValueError:
         normalized = value
     return normalized.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def _truncate_job_id(job_id: str) -> str:
+    """Return *job_id* truncated before the first ``.`` when safe."""
+
+    trimmed = job_id.strip()
+    head, separator, tail = trimmed.partition(".")
+    if not separator or not head or not tail:
+        return trimmed
+    return head
+
+
+def _parse_duration_spec(value: Optional[str]) -> Optional[timedelta]:
+    if value is None:
+        return None
+    spec = value.strip()
+    if not spec:
+        return None
+    days = 0
+    time_part = spec
+    if "-" in spec:
+        day_part, remainder = spec.split("-", 1)
+        try:
+            days = int(day_part)
+        except ValueError:
+            return None
+        if days < 0:
+            return None
+        time_part = remainder
+    parts = time_part.split(":")
+    try:
+        units = [int(part) for part in parts]
+    except ValueError:
+        return None
+    if len(units) > 4:
+        return None
+    if any(unit < 0 for unit in units):
+        return None
+    if len(units) == 4:
+        days += units[0]
+        hours, minutes, seconds = units[1:]
+    elif len(units) == 3:
+        hours, minutes, seconds = units
+    elif len(units) == 2:
+        hours, minutes, seconds = 0, units[0], units[1]
+    elif len(units) == 1:
+        hours, minutes, seconds = 0, 0, units[0]
+    else:
+        return None
+    return timedelta(days=days, hours=hours, minutes=minutes, seconds=seconds)
+
+
+def _normalize_datetimes_for_delta(
+    start: datetime, end: datetime
+) -> tuple[datetime, datetime]:
+    """Normalise *start* and *end* so subtraction is well-defined.
+
+    Both datetimes are converted to timezone-aware UTC values. Naive datetimes
+    are interpreted as UTC to avoid attaching mismatched offsets implicitly.
+    """
+
+    def to_utc(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        try:
+            return value.astimezone(timezone.utc)
+        except ValueError:
+            return value
+
+    return to_utc(start), to_utc(end)
+
+
+def _job_runtime_delta(job: Job, reference_time: datetime) -> Optional[timedelta]:
+    runtime_reference = job.end_time or reference_time
+    return job.runtime(runtime_reference)
+
+
+def _job_queue_duration(job: Job, reference_time: datetime) -> Optional[timedelta]:
+    start = job.queue_time or job.create_time
+    if start is None:
+        return None
+    end = job.start_time or reference_time
+    start, end = _normalize_datetimes_for_delta(start, end)
+    delta = end - start
+    return timedelta(seconds=0) if delta.total_seconds() < 0 else delta
+
+
+def _job_time_remaining(
+    job: Job, reference_time: datetime, runtime: Optional[timedelta] = None
+) -> Optional[timedelta]:
+    walltime = _parse_duration_spec(job.walltime)
+    if walltime is None:
+        return None
+    runtime = runtime if runtime is not None else _job_runtime_delta(job, reference_time)
+    if runtime is None:
+        return walltime
+    remaining = walltime - runtime
+    return timedelta(seconds=0) if remaining.total_seconds() < 0 else remaining
 def job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
     """Return a heuristic ``(node_count, first_node)`` tuple for *job*.
 
@@ -121,18 +278,29 @@ def format_job_table_cells(job: Job, reference_time: datetime) -> dict[str, Opti
     """Return column-keyed cell values for job table renderers."""
 
     node_count, first_node = job_node_summary(job)
-    runtime = _format_duration(job.runtime(reference_time))
+    runtime_delta = _job_runtime_delta(job, reference_time)
+    queued_duration = _job_queue_duration(job, reference_time)
+    time_remaining = _job_time_remaining(job, reference_time, runtime_delta)
+    est_start = job.estimated_start_time or job.start_time
+    if node_count is not None and first_node:
+        nodes_display = f"{node_count} ({first_node})"
+    elif node_count is not None:
+        nodes_display = str(node_count)
+    else:
+        nodes_display = first_node
     raw_values: dict[str, Optional[str]] = {
-        "Job ID": job.id,
-        "Name": job.name,
+        "#JobId": _truncate_job_id(job.id),
         "User": job.user,
-        "Queue": job.queue,
+        "Account": job.account,
+        "JobName": job.name,
+        "WallTime": job.walltime,
+        "QueuedTime": _format_duration(queued_duration),
+        "EstStart": _format_datetime(est_start),
+        "RunTime": _format_duration(runtime_delta),
+        "TimeRemaining": _format_duration(time_remaining),
+        "Nodes": nodes_display,
         "State": JOB_STATE_LABELS.get(job.state, job.state),
-        "Nodes": job.nodes,
-        "Node Count": str(node_count) if node_count is not None else None,
-        "First Node": first_node,
-        "Walltime": job.walltime,
-        "Runtime": runtime,
+        "Queue": job.queue,
     }
     ordered = {label: raw_values[label] for label, _ in JOB_TABLE_COLUMNS}
     assert len(ordered) == len(JOB_TABLE_COLUMNS), "job table cells must match column metadata"
@@ -210,36 +378,86 @@ class StatusBar(Static):
 class DetailPanel(Static):
     """Show details for the currently selected object."""
 
+    can_focus = True
+
+    def hide(self) -> None:
+        """Hide the panel and clear any existing content."""
+
+        self.display = False
+        self.update("")
+
     def show_job(self, job: Job, *, reference_time: Optional[datetime] = None) -> None:
+        self.display = True
+        effective_reference = reference_time or datetime.now(timezone.utc)
+        runtime_delta = _job_runtime_delta(job, effective_reference)
+        queued_duration = _job_queue_duration(job, effective_reference)
+        remaining = _job_time_remaining(job, effective_reference, runtime_delta)
+        node_count, first_node = job_node_summary(job)
+
         table = Table.grid(padding=(0, 1))
         table.add_column(style="bold cyan", justify="right")
         table.add_column(justify="left")
-        table.add_row("Job ID", job.id)
-        table.add_row("Name", job.name)
-        table.add_row("User", job.user)
-        table.add_row("Queue", job.queue)
-        table.add_row("State", JOB_STATE_LABELS.get(job.state, job.state))
-        table.add_row("Exec host", job.exec_host or "-")
-        table.add_row("Submitted", _format_datetime(job.create_time))
-        table.add_row("Started", _format_datetime(job.start_time))
-        table.add_row("Finished", _format_datetime(job.end_time))
-        table.add_row("Runtime", _format_duration(job.runtime(reference_time)))
-        table.add_row(
-            "Requested",
-            ", ".join(f"{k}={v}" for k, v in sorted(job.resources_requested.items())) or "-",
-        )
-        if job.resources_used:
-            table.add_row(
-                "Used",
-                ", ".join(f"{k}={v}" for k, v in sorted(job.resources_used.items())),
+
+        def add_row(label: str, value: Optional[str]) -> None:
+            if value is None:
+                display = "-"
+            else:
+                display = value if value.strip() else "-"
+            table.add_row(label, display)
+
+        add_row("Job ID", job.id)
+        add_row("Job name", job.name)
+        add_row("User", job.user)
+        add_row("Account", job.account)
+        add_row("Queue", job.queue)
+        add_row("State", JOB_STATE_LABELS.get(job.state, job.state))
+        add_row("Exec host", job.exec_host)
+
+        summary_parts: list[str] = []
+        if node_count is not None:
+            label = "node" if node_count == 1 else "nodes"
+            summary_parts.append(f"{node_count} {label}")
+        if first_node:
+            summary_parts.append(f"first: {first_node}")
+        add_row("Node summary", ", ".join(summary_parts) if summary_parts else None)
+
+        add_row("Requested nodes", job.nodes)
+        add_row("Walltime", job.walltime)
+        add_row("Runtime", _format_duration(runtime_delta))
+        add_row("Time remaining", _format_duration(remaining))
+        add_row("Queued time", _format_duration(queued_duration))
+        add_row("Submitted", _format_datetime(job.create_time))
+        add_row("Queue time", _format_datetime(job.queue_time))
+        add_row("Eligible", _format_datetime(job.eligible_time))
+        add_row("Estimated start", _format_datetime(job.estimated_start_time))
+        add_row("Started", _format_datetime(job.start_time))
+        add_row("Finished", _format_datetime(job.end_time))
+
+        location_parts: list[str] = []
+        if job.location:
+            location_parts.append(job.location)
+        if job.comment:
+            location_parts.append(job.comment)
+        location_text = "\n".join(location_parts) if location_parts else None
+        add_row("Location / Comments", location_text)
+
+        add_row("Exit status", job.exit_status)
+
+        if job.resources_requested:
+            requested = ", ".join(
+                f"{key}={value}" for key, value in sorted(job.resources_requested.items())
             )
-        table.add_row("Walltime", job.walltime or "-")
-        table.add_row("Nodes", job.nodes or "-")
-        table.add_row("Comment", job.comment or "-")
-        table.add_row("Exit status", job.exit_status or "-")
+            add_row("Resources requested", requested)
+        if job.resources_used:
+            used = ", ".join(
+                f"{key}={value}" for key, value in sorted(job.resources_used.items())
+            )
+            add_row("Resources used", used)
+
         self.update(Panel(table, title=f"Job {job.id}", border_style="cyan"))
 
     def show_node(self, node: Node) -> None:
+        self.display = True
         table = Table.grid(padding=(0, 1))
         table.add_column(style="bold green", justify="right")
         table.add_column(justify="left")
@@ -263,6 +481,7 @@ class DetailPanel(Static):
         self.update(Panel(table, title=f"Node {node.name}", border_style="green"))
 
     def show_queue(self, queue: Queue) -> None:
+        self.display = True
         table = Table.grid(padding=(0, 1))
         table.add_column(style="bold magenta", justify="right")
         table.add_column(justify="left")
@@ -290,6 +509,7 @@ class DetailPanel(Static):
         self.update(Panel(table, title=f"Queue {queue.name}", border_style="magenta"))
 
     def show_message(self, message: str) -> None:
+        self.display = True
         self.update(Panel(Text(message), title="Details"))
 
 
@@ -308,6 +528,46 @@ class JobsTable(DataTable):
             cells = format_job_table_cells(job, reference_time)
             ordered = [cells[label] for label, _ in JOB_TABLE_COLUMNS]
             self.add_row(*(_format_cell_value(value) for value in ordered), key=job.id)
+
+
+class HelpPanel(Static):
+    """Display application help and key bindings."""
+
+    HELP_TEXT = """
+# PBS TUI Help
+
+This dashboard provides a quick overview of the PBS scheduler state.
+
+## Key bindings
+
+- **q**: Quit the application
+- **r**: Refresh scheduler data
+- **j**: Focus the Jobs tab
+- **n**: Focus the Nodes tab
+- **u**: Focus the Queues tab
+- **Ctrl+P**: Toggle the command palette
+- **d**: Toggle the detail panel
+
+## Themes
+
+Use the command palette's **Change theme** action to switch between the bundled
+`pbs-dark`/`pbs-light` themes or Textual's defaults.
+
+## Jobs table filtering
+
+Use the **Filter jobs** input above the Jobs table to narrow results. Type one or
+more search terms; each term must match a value from any column. For example,
+enter `running` to show only running jobs or `alice gpu` to show jobs that match
+both terms across all columns.
+
+## Details panel
+
+Selecting a row from any table populates the details panel on the right. When
+there is more information than fits on screen, the panel becomes scrollable.
+"""
+
+    def on_mount(self) -> None:  # pragma: no cover - static content
+        self.mount(Markdown(self.HELP_TEXT))
 
 
 class NodesTable(DataTable):
@@ -370,6 +630,8 @@ class PBSTUI(App[None]):
         ("j", "focus_jobs", "Focus jobs"),
         ("n", "focus_nodes", "Focus nodes"),
         ("u", "focus_queues", "Focus queues"),
+        ("ctrl+p", "command_palette", "Command palette"),
+        ("d", "toggle_detail_panel", "Toggle detail panel"),
     ]
 
     refresh_interval: float = 30.0
@@ -381,6 +643,10 @@ class PBSTUI(App[None]):
         refresh_interval: float = 30.0,
     ) -> None:
         super().__init__()
+        if HAS_TEXTUAL_THEME_SUPPORT and PBS_DARK_THEME and PBS_LIGHT_THEME:
+            self.register_theme(PBS_DARK_THEME)
+            self.register_theme(PBS_LIGHT_THEME)
+            self.theme = PBS_DARK_THEME.name
         self.fetcher = fetcher or PBSDataFetcher()
         self.refresh_interval = refresh_interval
         self._snapshot: Optional[SchedulerSnapshot] = None
@@ -388,6 +654,12 @@ class PBSTUI(App[None]):
         self._node_index: dict[str, Node] = {}
         self._queue_index: dict[str, Queue] = {}
         self._refreshing: bool = False
+        self._job_filter: str = ""
+        self._selected_job_id: Optional[str] = None
+        self._selected_node_name: Optional[str] = None
+        self._selected_queue_name: Optional[str] = None
+        self._detail_source: Optional[str] = None
+        self._detail_panel_enabled: bool = True
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -396,11 +668,18 @@ class PBSTUI(App[None]):
                 yield SummaryWidget(id="summary")
                 with TabbedContent(id="tabs"):
                     with TabPane("Jobs", id="jobs_tab"):
-                        yield JobsTable(id="jobs_table")
+                        with Vertical(id="jobs_tab_content"):
+                            yield Input(
+                                placeholder="Filter jobs…",
+                                id="jobs_filter",
+                            )
+                            yield JobsTable(id="jobs_table")
                     with TabPane("Nodes", id="nodes_tab"):
                         yield NodesTable(id="nodes_table")
                     with TabPane("Queues", id="queues_tab"):
                         yield QueuesTable(id="queues_table")
+                    with TabPane("Help", id="help_tab"):
+                        yield HelpPanel(id="help_panel")
             yield DetailPanel(id="details")
         yield StatusBar(id="status")
         yield Footer()
@@ -408,6 +687,7 @@ class PBSTUI(App[None]):
     async def on_mount(self) -> None:
         self.set_interval(self.refresh_interval, self.refresh_data)
         await self.refresh_data()
+        self.query_one(DetailPanel).hide()
 
     async def refresh_data(self) -> None:
         if self._refreshing:
@@ -434,28 +714,62 @@ class PBSTUI(App[None]):
                 message_parts.append("; ".join(snapshot.errors))
             status = self.query_one(StatusBar)
             status.update_status(" | ".join(message_parts), severity=severity)
-            details = self.query_one(DetailPanel)
-            if snapshot.jobs:
-                details.show_job(snapshot.jobs[0], reference_time=snapshot.timestamp)
-            elif snapshot.nodes:
-                details.show_node(snapshot.nodes[0])
-            elif snapshot.queues:
-                details.show_queue(snapshot.queues[0])
-            else:
-                details.show_message("No scheduler data available")
         finally:
             self._refreshing = False
 
     def _update_tables(self, snapshot: SchedulerSnapshot) -> None:
-        jobs_table = self.query_one(JobsTable)
         nodes_table = self.query_one(NodesTable)
         queues_table = self.query_one(QueuesTable)
-        jobs_table.update_jobs(snapshot.jobs, snapshot.timestamp)
+        self._refresh_jobs_table()
         nodes_table.update_nodes(snapshot.nodes)
         queues_table.update_queues(snapshot.queues)
         self._job_index = {job.id: job for job in snapshot.jobs}
         self._node_index = {node.name: node for node in snapshot.nodes}
         self._queue_index = {queue.name: queue for queue in snapshot.queues}
+        self._update_detail_panel(reference_time=snapshot.timestamp)
+
+    def _refresh_jobs_table(self) -> None:
+        jobs_table = self.query_one(JobsTable)
+        if self._snapshot is None:
+            return
+        reference_time = self._snapshot.timestamp or datetime.now()
+        filtered_jobs = self._get_filtered_jobs(reference_time)
+        jobs_table.update_jobs(filtered_jobs, reference_time)
+        if self._selected_job_id:
+            if selected_job := next(
+                (job for job in filtered_jobs if job.id == self._selected_job_id),
+                None,
+            ):
+                # Ensure we keep the stored id for later refreshes.
+                self._selected_job_id = selected_job.id
+            else:
+                self._selected_job_id = None
+                if self._detail_source == "job":
+                    self._detail_source = None
+                    self.query_one(DetailPanel).hide()
+        elif self._detail_source == "job":
+            self._detail_source = None
+            self.query_one(DetailPanel).hide()
+        self._update_detail_panel(reference_time=reference_time)
+
+    def _get_filtered_jobs(self, reference_time: datetime) -> list[Job]:
+        if self._snapshot is None:
+            return []
+        return [
+            job
+            for job in _sort_jobs_for_display(self._snapshot.jobs)
+            if self._job_matches_filter(job, reference_time)
+        ]
+
+    def _job_matches_filter(self, job: Job, reference_time: datetime) -> bool:
+        if not self._job_filter:
+            return True
+        terms = self._job_filter.lower().split()
+        if not terms:
+            return True
+        cells = format_job_table_cells(job, reference_time)
+        row_values = [(value or "").lower() for value in cells.values()]
+        return not any(all(term not in value for value in row_values) for term in terms)
 
     async def action_refresh(self) -> None:
         await self.refresh_data()
@@ -472,6 +786,17 @@ class PBSTUI(App[None]):
         self.query_one(TabbedContent).active = "queues_tab"
         self.query_one(QueuesTable).focus()
 
+    def action_toggle_detail_panel(self) -> None:
+        """Toggle the visibility of the detail panel."""
+
+        self._detail_panel_enabled = not self._detail_panel_enabled
+        self._update_detail_panel(reference_time=self._snapshot.timestamp if self._snapshot else None)
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "jobs_filter":
+            self._job_filter = event.value.strip()
+            self._refresh_jobs_table()
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if isinstance(event.data_table, JobsTable):
             job_id = str(event.row_key.value if hasattr(event.row_key, "value") else event.row_key)
@@ -479,23 +804,91 @@ class PBSTUI(App[None]):
                 return
             job = self._job_index.get(job_id)
             if job:
-                self.query_one(DetailPanel).show_job(
-                    job, reference_time=self._snapshot.timestamp
-                )
+                self._selected_job_id = job.id
+                self._selected_node_name = None
+                self._selected_queue_name = None
+                self._detail_source = "job"
+                if self._detail_panel_enabled:
+                    self.query_one(DetailPanel).show_job(
+                        job, reference_time=self._snapshot.timestamp
+                    )
+                else:
+                    self.query_one(DetailPanel).hide()
         elif isinstance(event.data_table, NodesTable):
+            self._selected_job_id = None
             node_name = str(event.row_key.value if hasattr(event.row_key, "value") else event.row_key)
             if self._snapshot is None:
                 return
             node = self._node_index.get(node_name)
             if node:
-                self.query_one(DetailPanel).show_node(node)
+                self._selected_node_name = node.name
+                self._selected_queue_name = None
+                self._detail_source = "node"
+                if self._detail_panel_enabled:
+                    self.query_one(DetailPanel).show_node(node)
+                else:
+                    self.query_one(DetailPanel).hide()
         elif isinstance(event.data_table, QueuesTable):
+            self._selected_job_id = None
             queue_name = str(event.row_key.value if hasattr(event.row_key, "value") else event.row_key)
             if self._snapshot is None:
                 return
             queue = self._queue_index.get(queue_name)
             if queue:
-                self.query_one(DetailPanel).show_queue(queue)
+                self._selected_queue_name = queue.name
+                self._selected_node_name = None
+                self._detail_source = "queue"
+                if self._detail_panel_enabled:
+                    self.query_one(DetailPanel).show_queue(queue)
+                else:
+                    self.query_one(DetailPanel).hide()
+
+    def _update_detail_panel(self, *, reference_time: Optional[datetime] = None) -> None:
+        """Refresh the detail panel based on current selection and visibility."""
+
+        details = self.query_one(DetailPanel)
+
+        if not self._detail_panel_enabled:
+            details.hide()
+            return
+
+        if (
+            self._detail_source == "job"
+            and (job_id := self._selected_job_id)
+            and self._snapshot
+        ):
+            if job := self._job_index.get(job_id):
+                details.show_job(
+                    job, reference_time=reference_time or self._snapshot.timestamp
+                )
+                return
+            self._selected_job_id = None
+            self._detail_source = None
+        elif self._detail_source == "node" and (node_name := self._selected_node_name):
+            if node := self._node_index.get(node_name):
+                details.show_node(node)
+                return
+            self._selected_node_name = None
+            self._detail_source = None
+        elif self._detail_source == "queue" and (
+            queue_name := self._selected_queue_name
+        ):
+            if queue := self._queue_index.get(queue_name):
+                details.show_queue(queue)
+                return
+            self._selected_queue_name = None
+            self._detail_source = None
+
+        details.hide()
+
+    def get_system_commands(self, screen: Screen) -> Iterable[object]:
+        yield from super().get_system_commands(screen)
+        if _SYSTEM_COMMAND_CLS is not None:
+            yield _SYSTEM_COMMAND_CLS(
+                "Toggle detail panel",
+                "Show or hide the detail pane",
+                self.action_toggle_detail_panel,
+            )
 
 
 def _escape_markdown_cell(text: str) -> str:

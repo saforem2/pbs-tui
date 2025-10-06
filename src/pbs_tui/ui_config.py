@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 JOB_TABLE_COLUMNS: list[tuple[str, str]] = [
-    ("Job ID", "left"),
-    ("Name", "left"),
+    ("#JobId", "left"),
     ("User", "left"),
+    ("Account", "left"),
+    ("JobName", "left"),
     ("Queue", "left"),
+    ("WallTime", "right"),
+    ("QueuedTime", "right"),
+    ("EstStart", "left"),
+    ("RunTime", "right"),
+    ("TimeRemaining", "right"),
+    ("Nodes", "right"),
     ("State", "left"),
-    ("Nodes", "left"),
-    ("Node Count", "right"),
-    ("First Node", "left"),
-    ("Walltime", "left"),
-    ("Runtime", "left"),
 ]
 
 __all__ = ["JOB_TABLE_COLUMNS"]

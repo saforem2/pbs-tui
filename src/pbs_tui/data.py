@@ -17,14 +17,19 @@ class Job:
     queue: str
     state: str
     exec_host: Optional[str] = None
+    account: Optional[str] = None
     create_time: Optional[datetime] = None
+    queue_time: Optional[datetime] = None
+    eligible_time: Optional[datetime] = None
     start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
+    estimated_start_time: Optional[datetime] = None
     walltime: Optional[str] = None
     nodes: Optional[str] = None
     resources_requested: Dict[str, str] = field(default_factory=dict)
     resources_used: Dict[str, str] = field(default_factory=dict)
     comment: Optional[str] = None
+    location: Optional[str] = None
     exit_status: Optional[str] = None
 
     def runtime(self, reference: Optional[datetime] = None) -> Optional[timedelta]:

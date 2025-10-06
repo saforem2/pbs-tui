@@ -132,6 +132,15 @@ def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _clean_str(value: Optional[object]) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        value = str(value)
+    cleaned = value.strip()
+    return cleaned or None
+
+
 def _collect_child_text(element: Optional[ET.Element]) -> Dict[str, str]:
     result: Dict[str, str] = {}
     if element is None:
@@ -141,6 +150,60 @@ def _collect_child_text(element: Optional[ET.Element]) -> Dict[str, str]:
         text = child.text.strip() if child.text else ""
         result[key] = text
     return result
+
+
+FieldSpec = Tuple[str, Sequence[str], Callable[[Optional[str]], object]]
+
+
+def _first_present(values: Iterable[Optional[str]]) -> Optional[str]:
+    for candidate in values:
+        if candidate is None:
+            continue
+        stripped = candidate.strip()
+        if stripped:
+            return stripped
+    return None
+
+
+def _collect_fields_from_element(
+    element: ET.Element, specs: Sequence[FieldSpec]
+) -> Dict[str, object]:
+    data: Dict[str, object] = {}
+    for attribute, tags, transform in specs:
+        raw_value = _first_present(element.findtext(tag) for tag in tags)
+        data[attribute] = transform(raw_value)
+    return data
+
+
+def _collect_fields_from_mapping(
+    mapping: Dict[str, str], specs: Sequence[FieldSpec]
+) -> Dict[str, object]:
+    data: Dict[str, object] = {}
+    for attribute, keys, transform in specs:
+        raw_value = _first_present(mapping.get(key) for key in keys)
+        data[attribute] = transform(raw_value)
+    return data
+
+
+_JOB_FIELD_SPECS: Sequence[FieldSpec] = (
+    ("account", ("Account_Name", "account", "Account", "project"), _clean_str),
+    ("queue_time", ("qtime", "queue_time", "Queue_Time"), _parse_timestamp),
+    ("eligible_time", ("etime", "eligible_time"), _parse_timestamp),
+    (
+        "estimated_start_time",
+        ("estimated.start_time", "estimated_start_time", "estimatedStartTime", "estimated.starttime"),
+        _parse_timestamp,
+    ),
+    ("location", ("job_location", "Job_Location", "location", "Location"), _clean_str),
+    ("comment", ("comment", "sched_comment"), _clean_str),
+    ("exit_status", ("Exit_status", "exit_status"), _clean_str),
+)
+
+
+def _parse_start_time_candidates(values: Iterable[Optional[str]]) -> Optional[datetime]:
+    """Return the first parsable start time from *values*."""
+
+    return _parse_timestamp(_first_present(values))
 
 
 class PBSDataFetcher:
@@ -315,6 +378,7 @@ class PBSDataFetcher:
             job_id = job_el.findtext("Job_Id", "").strip()
             if not job_id:
                 continue
+            field_values = _collect_fields_from_element(job_el, _JOB_FIELD_SPECS)
             job = Job(
                 id=job_id,
                 name=job_el.findtext("Job_Name", "").strip(),
@@ -323,10 +387,16 @@ class PBSDataFetcher:
                 state=job_el.findtext("job_state", "").strip(),
                 exec_host=(job_el.findtext("exec_host") or "").strip() or None,
                 create_time=_parse_timestamp(job_el.findtext("ctime")),
-                start_time=_parse_timestamp(
-                    job_el.findtext("start_time")
-                    or job_el.findtext("stime")
-                    or job_el.findtext("etime")
+                start_time=_parse_start_time_candidates(
+                    (
+                        job_el.findtext("start_time"),
+                        job_el.findtext("stime"),
+                        job_el.findtext("etime"),
+                        job_el.findtext("eligible_time"),
+                        job_el.findtext("qtime"),
+                        job_el.findtext("queue_time"),
+                        job_el.findtext("Queue_Time"),
+                    )
                 ),
                 end_time=_parse_timestamp(job_el.findtext("comp_time") or job_el.findtext("mtime")),
                 walltime=(
@@ -336,8 +406,7 @@ class PBSDataFetcher:
                 nodes=job_el.findtext("Resource_List/nodes"),
                 resources_requested=_collect_child_text(job_el.find("Resource_List")),
                 resources_used=_collect_child_text(job_el.find("resources_used")),
-                comment=(job_el.findtext("comment") or job_el.findtext("sched_comment")),
-                exit_status=job_el.findtext("Exit_status"),
+                **field_values,
             )
             jobs.append(job)
         return jobs
@@ -496,13 +565,7 @@ class PBSDataFetcher:
             if key.startswith("resources_used.") and "." in key
         }
 
-        comment = (mapping.get("comment") or mapping.get("sched_comment") or "").strip()
-        if not comment:
-            comment = None
-
-        exit_status = (mapping.get("Exit_status") or mapping.get("exit_status") or "").strip()
-        if not exit_status:
-            exit_status = None
+        field_values = _collect_fields_from_mapping(mapping, _JOB_FIELD_SPECS)
 
         job = Job(
             id=job_id.strip(),
@@ -514,11 +577,17 @@ class PBSDataFetcher:
             state=(mapping.get("job_state") or mapping.get("jobstate") or "").strip(),
             exec_host=(mapping.get("exec_host") or mapping.get("exec_host2") or "").strip() or None,
             create_time=_parse_timestamp(mapping.get("ctime")),
-            start_time=_parse_timestamp(
-                mapping.get("start_time")
-                or mapping.get("stime")
-                or mapping.get("etime")
-                or mapping.get("qtime")
+            start_time=_parse_start_time_candidates(
+                (
+                    mapping.get("start_time"),
+                    mapping.get("stime"),
+                    mapping.get("etime"),
+                    mapping.get("eligible_time"),
+                    mapping.get("Eligible_Time"),
+                    mapping.get("qtime"),
+                    mapping.get("queue_time"),
+                    mapping.get("Queue_Time"),
+                )
             ),
             end_time=_parse_timestamp(mapping.get("comp_time") or mapping.get("mtime")),
             walltime=resources_requested.get("walltime")
@@ -527,8 +596,7 @@ class PBSDataFetcher:
             nodes=resources_requested.get("nodes") or mapping.get("nodes"),
             resources_requested=resources_requested,
             resources_used=resources_used,
-            comment=comment,
-            exit_status=exit_status,
+            **field_values,
         )
         return job
 

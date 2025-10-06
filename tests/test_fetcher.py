@@ -44,8 +44,13 @@ def test_parse_jobs_xml_extracts_fields():
         <queue>batch</queue>
         <job_state>R</job_state>
         <exec_host>nid0001</exec_host>
+        <Account_Name>science</Account_Name>
         <ctime>2024-05-11T10:00:00Z</ctime>
+        <qtime>2024-05-11T09:50:00Z</qtime>
+        <etime>2024-05-11T10:02:00Z</etime>
         <start_time>2024-05-11T10:05:00Z</start_time>
+        <estimated.start_time>2024-05-11T10:06:00Z</estimated.start_time>
+        <job_location>Data center row 1</job_location>
         <Resource_List>
           <walltime>01:00:00</walltime>
           <nodes>1:ppn=4</nodes>
@@ -60,9 +65,49 @@ def test_parse_jobs_xml_extracts_fields():
     job = fetcher._parse_jobs_xml(xml)[0]
     assert job.id == "123.a"
     assert job.user == "user"
+    assert job.account == "science"
+    assert job.queue_time == datetime(2024, 5, 11, 9, 50, tzinfo=timezone.utc)
+    assert job.eligible_time == datetime(2024, 5, 11, 10, 2, tzinfo=timezone.utc)
+    assert job.estimated_start_time == datetime(2024, 5, 11, 10, 6, tzinfo=timezone.utc)
+    assert job.location == "Data center row 1"
     assert job.resources_requested["walltime"] == "01:00:00"
     assert job.resources_used["walltime"] == "00:10:00"
     assert job.runtime(datetime(2024, 5, 11, 10, 15, tzinfo=timezone.utc))
+
+
+def test_parse_jobs_xml_falls_back_to_eligible_time_for_start_time():
+    xml = """
+    <Data>
+      <Job>
+        <Job_Id>123.a</Job_Id>
+        <Job_Name>analysis</Job_Name>
+        <Job_Owner>user@host</Job_Owner>
+        <queue>batch</queue>
+        <job_state>Q</job_state>
+        <etime>2024-05-11T10:02:00Z</etime>
+      </Job>
+    </Data>
+    """
+    fetcher = PBSDataFetcher(force_sample=True)
+    job = fetcher._parse_jobs_xml(xml)[0]
+    assert job.start_time == datetime(2024, 5, 11, 10, 2, tzinfo=timezone.utc)
+
+
+def test_parse_jobs_json_falls_back_to_queue_time_for_start_time():
+    payload = {
+        "Jobs": {
+            "789.c": {
+                "Job_Name": "render",
+                "Job_Owner": "carol@cluster",
+                "queue": "vis",
+                "job_state": "Q",
+                "qtime": "2024-05-12T09:00:00Z",
+            }
+        }
+    }
+    fetcher = PBSDataFetcher(force_sample=True)
+    job = fetcher._parse_jobs_json(json.dumps(payload))[0]
+    assert job.start_time == datetime(2024, 5, 12, 9, 0, tzinfo=timezone.utc)
 
 
 def test_parse_jobs_text_extracts_fields():
@@ -74,8 +119,13 @@ def test_parse_jobs_text_extracts_fields():
             queue = prod
             job_state = R
             exec_host = node001/0+node002/0
+            Account_Name = compute
             ctime = Tue May 14 09:00:00 2024
+            qtime = Tue May 14 09:01:00 2024
+            etime = Tue May 14 09:03:00 2024
             start_time = Tue May 14 09:05:00 2024
+            estimated.start_time = Tue May 14 09:10:00 2024
+            job_location = Building 1
             Resource_List.walltime = 01:30:00
             Resource_List.nodes = 2:ppn=64
             resources_used.walltime = 00:45:00
@@ -86,6 +136,11 @@ def test_parse_jobs_text_extracts_fields():
     assert job.id == "456.b"
     assert job.queue == "prod"
     assert job.exec_host == "node001/0+node002/0"
+    assert job.account == "compute"
+    assert job.queue_time == datetime(2024, 5, 14, 9, 1, tzinfo=timezone.utc)
+    assert job.eligible_time == datetime(2024, 5, 14, 9, 3, tzinfo=timezone.utc)
+    assert job.estimated_start_time == datetime(2024, 5, 14, 9, 10, tzinfo=timezone.utc)
+    assert job.location == "Building 1"
     assert job.resources_requested["nodes"] == "2:ppn=64"
     assert job.resources_used["walltime"] == "00:45:00"
 
@@ -98,6 +153,11 @@ def test_parse_jobs_json_extracts_fields():
                 "Job_Owner": "carol@cluster",
                 "queue": "vis",
                 "job_state": "Q",
+                "Account_Name": "visual",
+                "qtime": "2024-05-12T09:00:00Z",
+                "etime": "2024-05-12T09:05:00Z",
+                "estimated.start_time": "2024-05-12T09:30:00Z",
+                "job_location": "Queue room",
                 "Resource_List": {"walltime": "00:20:00", "nodes": "1:ppn=16"},
                 "resources_used": {"walltime": "00:05:00"},
             }
@@ -107,6 +167,11 @@ def test_parse_jobs_json_extracts_fields():
     job = fetcher._parse_jobs_json(json.dumps(payload))[0]
     assert job.id == "789.c"
     assert job.queue == "vis"
+    assert job.account == "visual"
+    assert job.queue_time == datetime(2024, 5, 12, 9, 0, tzinfo=timezone.utc)
+    assert job.eligible_time == datetime(2024, 5, 12, 9, 5, tzinfo=timezone.utc)
+    assert job.estimated_start_time == datetime(2024, 5, 12, 9, 30, tzinfo=timezone.utc)
+    assert job.location == "Queue room"
     assert job.resources_requested["nodes"] == "1:ppn=16"
     assert job.resources_used["walltime"] == "00:05:00"
 
