@@ -200,6 +200,12 @@ _JOB_FIELD_SPECS: Sequence[FieldSpec] = (
 )
 
 
+def _parse_start_time_candidates(values: Iterable[Optional[str]]) -> Optional[datetime]:
+    """Return the first parsable start time from *values*."""
+
+    return _parse_timestamp(_first_present(values))
+
+
 class PBSDataFetcher:
     """Fetch PBS Pro scheduler data via the command-line utilities."""
 
@@ -381,9 +387,16 @@ class PBSDataFetcher:
                 state=job_el.findtext("job_state", "").strip(),
                 exec_host=(job_el.findtext("exec_host") or "").strip() or None,
                 create_time=_parse_timestamp(job_el.findtext("ctime")),
-                start_time=_parse_timestamp(
-                    job_el.findtext("start_time")
-                    or job_el.findtext("stime")
+                start_time=_parse_start_time_candidates(
+                    (
+                        job_el.findtext("start_time"),
+                        job_el.findtext("stime"),
+                        job_el.findtext("etime"),
+                        job_el.findtext("eligible_time"),
+                        job_el.findtext("qtime"),
+                        job_el.findtext("queue_time"),
+                        job_el.findtext("Queue_Time"),
+                    )
                 ),
                 end_time=_parse_timestamp(job_el.findtext("comp_time") or job_el.findtext("mtime")),
                 walltime=(
@@ -564,9 +577,17 @@ class PBSDataFetcher:
             state=(mapping.get("job_state") or mapping.get("jobstate") or "").strip(),
             exec_host=(mapping.get("exec_host") or mapping.get("exec_host2") or "").strip() or None,
             create_time=_parse_timestamp(mapping.get("ctime")),
-            start_time=_parse_timestamp(
-                mapping.get("start_time")
-                or mapping.get("stime")
+            start_time=_parse_start_time_candidates(
+                (
+                    mapping.get("start_time"),
+                    mapping.get("stime"),
+                    mapping.get("etime"),
+                    mapping.get("eligible_time"),
+                    mapping.get("Eligible_Time"),
+                    mapping.get("qtime"),
+                    mapping.get("queue_time"),
+                    mapping.get("Queue_Time"),
+                )
             ),
             end_time=_parse_timestamp(mapping.get("comp_time") or mapping.get("mtime")),
             walltime=resources_requested.get("walltime")

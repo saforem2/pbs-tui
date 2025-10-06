@@ -34,6 +34,14 @@ NOW = datetime(2024, 1, 1, 12, 0, tzinfo=timezone.utc)
 COLUMN_NAMES = [name for name, _ in JOB_TABLE_COLUMNS]
 
 
+def _job_table_display_id(job_id: str) -> str:
+    trimmed = job_id.strip()
+    head, separator, tail = trimmed.partition(".")
+    if not separator or not head or not tail:
+        return trimmed
+    return head
+
+
 def _row_from_rich(line: str) -> dict[str, str]:
     cells = [cell.strip() for cell in re.split(r"\s{2,}", line.strip()) if cell.strip()]
     assert len(cells) == len(COLUMN_NAMES), f"Unexpected cell count in line: {line}"
@@ -74,7 +82,7 @@ def _rich_rows(rendered: str) -> list[dict[str, str]]:
 
 
 def _find_markdown_row(markdown: str, job_id: str) -> tuple[dict[str, str], int]:
-    lookup = job_id.split(".", 1)[0]
+    lookup = _job_table_display_id(job_id)
     for index, row in enumerate(_markdown_rows(markdown)):
         if row[COLUMN_NAMES[0]] == lookup:
             return row, index
@@ -145,6 +153,22 @@ def test_format_job_table_cells_matches_columns():
     job = make_job()
     cells = format_job_table_cells(job, NOW)
     assert list(cells.keys()) == [label for label, _ in JOB_TABLE_COLUMNS]
+
+
+def test_format_job_table_cells_truncates_job_id_suffix():
+    job = make_job(id="123.server")
+    cells = format_job_table_cells(job, NOW)
+    assert cells["#JobId"] == "123"
+
+
+def test_format_job_table_cells_preserves_unexpected_job_id_formats():
+    job = make_job(id="job-without-suffix")
+    cells = format_job_table_cells(job, NOW)
+    assert cells["#JobId"] == "job-without-suffix"
+
+    dotted_job = make_job(id=".leadingdot")
+    dotted_cells = format_job_table_cells(dotted_job, NOW)
+    assert dotted_cells["#JobId"] == ".leadingdot"
 
 
 @pytest.mark.skipif(

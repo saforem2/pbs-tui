@@ -75,6 +75,41 @@ def test_parse_jobs_xml_extracts_fields():
     assert job.runtime(datetime(2024, 5, 11, 10, 15, tzinfo=timezone.utc))
 
 
+def test_parse_jobs_xml_falls_back_to_eligible_time_for_start_time():
+    xml = """
+    <Data>
+      <Job>
+        <Job_Id>123.a</Job_Id>
+        <Job_Name>analysis</Job_Name>
+        <Job_Owner>user@host</Job_Owner>
+        <queue>batch</queue>
+        <job_state>Q</job_state>
+        <etime>2024-05-11T10:02:00Z</etime>
+      </Job>
+    </Data>
+    """
+    fetcher = PBSDataFetcher(force_sample=True)
+    job = fetcher._parse_jobs_xml(xml)[0]
+    assert job.start_time == datetime(2024, 5, 11, 10, 2, tzinfo=timezone.utc)
+
+
+def test_parse_jobs_json_falls_back_to_queue_time_for_start_time():
+    payload = {
+        "Jobs": {
+            "789.c": {
+                "Job_Name": "render",
+                "Job_Owner": "carol@cluster",
+                "queue": "vis",
+                "job_state": "Q",
+                "qtime": "2024-05-12T09:00:00Z",
+            }
+        }
+    }
+    fetcher = PBSDataFetcher(force_sample=True)
+    job = fetcher._parse_jobs_json(json.dumps(payload))[0]
+    assert job.start_time == datetime(2024, 5, 12, 9, 0, tzinfo=timezone.utc)
+
+
 def test_parse_jobs_text_extracts_fields():
     text = textwrap.dedent(
         """

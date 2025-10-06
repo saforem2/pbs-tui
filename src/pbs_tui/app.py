@@ -151,6 +151,16 @@ def _format_datetime(value: Optional[datetime]) -> str:
     return normalized.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
+def _truncate_job_id(job_id: str) -> str:
+    """Return *job_id* truncated before the first ``.`` when safe."""
+
+    trimmed = job_id.strip()
+    head, separator, tail = trimmed.partition(".")
+    if not separator or not head or not tail:
+        return trimmed
+    return head
+
+
 def _parse_duration_spec(value: Optional[str]) -> Optional[timedelta]:
     if value is None:
         return None
@@ -279,7 +289,7 @@ def format_job_table_cells(job: Job, reference_time: datetime) -> dict[str, Opti
     else:
         nodes_display = first_node
     raw_values: dict[str, Optional[str]] = {
-        "#JobId": job.id.split(".", 1)[0],
+        "#JobId": _truncate_job_id(job.id),
         "User": job.user,
         "Account": job.account,
         "JobName": job.name,
