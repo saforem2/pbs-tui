@@ -12,5 +12,3 @@ __all__ = [
     "run",
     "snapshot_to_markdown",
 ]
-
-__version__ = "0.1.0"
