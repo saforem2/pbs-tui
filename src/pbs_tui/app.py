@@ -18,7 +18,16 @@ from rich.table import Table
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import DataTable, Footer, Header, Static, TabPane, TabbedContent
+from textual.widgets import (
+    DataTable,
+    Footer,
+    Header,
+    Input,
+    Markdown,
+    Static,
+    TabPane,
+    TabbedContent,
+)
 from textual.pilot import Pilot
 
 from .data import Job, Node, Queue, SchedulerSnapshot
@@ -123,7 +132,7 @@ def format_job_table_cells(job: Job, reference_time: datetime) -> dict[str, Opti
     node_count, first_node = job_node_summary(job)
     runtime = _format_duration(job.runtime(reference_time))
     raw_values: dict[str, Optional[str]] = {
-        "Job ID": job.id,
+        "Job ID": job.id.split(".", 1)[0],
         "Name": job.name,
         "User": job.user,
         "Queue": job.queue,
@@ -310,6 +319,40 @@ class JobsTable(DataTable):
             self.add_row(*(_format_cell_value(value) for value in ordered), key=job.id)
 
 
+class HelpPanel(Static):
+    """Display application help and key bindings."""
+
+    HELP_TEXT = """
+# PBS TUI Help
+
+This dashboard provides a quick overview of the PBS scheduler state.
+
+## Key bindings
+
+- **q**: Quit the application
+- **r**: Refresh scheduler data
+- **j**: Focus the Jobs tab
+- **n**: Focus the Nodes tab
+- **u**: Focus the Queues tab
+- **Ctrl+P**: Toggle the command palette
+
+## Jobs table filtering
+
+Use the **Filter jobs** input above the Jobs table to narrow results. Type one or
+more search terms; each term must match a value from any column. For example,
+enter `running` to show only running jobs or `alice gpu` to show jobs that match
+both terms across all columns.
+
+## Details panel
+
+Selecting a row from any table populates the details panel on the right. When
+there is more information than fits on screen, the panel becomes scrollable.
+"""
+
+    def on_mount(self) -> None:  # pragma: no cover - static content
+        self.mount(Markdown(self.HELP_TEXT))
+
+
 class NodesTable(DataTable):
     """Data table displaying nodes."""
 
@@ -370,6 +413,7 @@ class PBSTUI(App[None]):
         ("j", "focus_jobs", "Focus jobs"),
         ("n", "focus_nodes", "Focus nodes"),
         ("u", "focus_queues", "Focus queues"),
+        ("ctrl+p", "command_palette", "Command palette"),
     ]
 
     refresh_interval: float = 30.0
@@ -388,6 +432,7 @@ class PBSTUI(App[None]):
         self._node_index: dict[str, Node] = {}
         self._queue_index: dict[str, Queue] = {}
         self._refreshing: bool = False
+        self._job_filter: str = ""
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -396,11 +441,18 @@ class PBSTUI(App[None]):
                 yield SummaryWidget(id="summary")
                 with TabbedContent(id="tabs"):
                     with TabPane("Jobs", id="jobs_tab"):
-                        yield JobsTable(id="jobs_table")
+                        with Vertical(id="jobs_tab_content"):
+                            yield Input(
+                                placeholder="Filter jobs…",
+                                id="jobs_filter",
+                            )
+                            yield JobsTable(id="jobs_table")
                     with TabPane("Nodes", id="nodes_tab"):
                         yield NodesTable(id="nodes_table")
                     with TabPane("Queues", id="queues_tab"):
                         yield QueuesTable(id="queues_table")
+                    with TabPane("Help", id="help_tab"):
+                        yield HelpPanel(id="help_panel")
             yield DetailPanel(id="details")
         yield StatusBar(id="status")
         yield Footer()
@@ -435,8 +487,12 @@ class PBSTUI(App[None]):
             status = self.query_one(StatusBar)
             status.update_status(" | ".join(message_parts), severity=severity)
             details = self.query_one(DetailPanel)
-            if snapshot.jobs:
-                details.show_job(snapshot.jobs[0], reference_time=snapshot.timestamp)
+            reference_time = snapshot.timestamp or datetime.now()
+            filtered_jobs = self._get_filtered_jobs(reference_time)
+            if filtered_jobs:
+                details.show_job(filtered_jobs[0], reference_time=reference_time)
+            elif snapshot.jobs:
+                details.show_message("No jobs match the current filter")
             elif snapshot.nodes:
                 details.show_node(snapshot.nodes[0])
             elif snapshot.queues:
@@ -447,15 +503,48 @@ class PBSTUI(App[None]):
             self._refreshing = False
 
     def _update_tables(self, snapshot: SchedulerSnapshot) -> None:
-        jobs_table = self.query_one(JobsTable)
         nodes_table = self.query_one(NodesTable)
         queues_table = self.query_one(QueuesTable)
-        jobs_table.update_jobs(snapshot.jobs, snapshot.timestamp)
+        self._refresh_jobs_table()
         nodes_table.update_nodes(snapshot.nodes)
         queues_table.update_queues(snapshot.queues)
         self._job_index = {job.id: job for job in snapshot.jobs}
         self._node_index = {node.name: node for node in snapshot.nodes}
         self._queue_index = {queue.name: queue for queue in snapshot.queues}
+
+    def _refresh_jobs_table(self) -> None:
+        jobs_table = self.query_one(JobsTable)
+        if self._snapshot is None:
+            return
+        reference_time = self._snapshot.timestamp or datetime.now()
+        filtered_jobs = self._get_filtered_jobs(reference_time)
+        jobs_table.update_jobs(filtered_jobs, reference_time)
+        if not filtered_jobs:
+            self.query_one(DetailPanel).show_message("No jobs match the current filter")
+        else:
+            self.query_one(DetailPanel).show_job(filtered_jobs[0], reference_time=reference_time)
+
+    def _get_filtered_jobs(self, reference_time: datetime) -> list[Job]:
+        if self._snapshot is None:
+            return []
+        return [
+            job
+            for job in _sort_jobs_for_display(self._snapshot.jobs)
+            if self._job_matches_filter(job, reference_time)
+        ]
+
+    def _job_matches_filter(self, job: Job, reference_time: datetime) -> bool:
+        if not self._job_filter:
+            return True
+        terms = self._job_filter.lower().split()
+        if not terms:
+            return True
+        cells = format_job_table_cells(job, reference_time)
+        row_values = [value or "" for value in cells.values()]
+        for term in terms:
+            if not any(term in value.lower() for value in row_values):
+                return False
+        return True
 
     async def action_refresh(self) -> None:
         await self.refresh_data()
@@ -471,6 +560,11 @@ class PBSTUI(App[None]):
     def action_focus_queues(self) -> None:
         self.query_one(TabbedContent).active = "queues_tab"
         self.query_one(QueuesTable).focus()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "jobs_filter":
+            self._job_filter = event.value.strip()
+            self._refresh_jobs_table()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if isinstance(event.data_table, JobsTable):
