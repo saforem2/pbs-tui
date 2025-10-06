@@ -54,6 +54,7 @@ DataTable {
     border: tall $surface;
     padding: 1 2;
     margin-left: 1;
+    overflow-x: auto;
     overflow-y: auto;
 }
 

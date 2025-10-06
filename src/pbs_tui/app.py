@@ -16,8 +16,9 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from textual.app import App, ComposeResult
+from textual.app import App, ComposeResult, SystemCommand
 from textual.containers import Horizontal, Vertical
+from textual.screen import Screen
 from textual.widgets import (
     DataTable,
     Footer,
@@ -568,7 +569,10 @@ class PBSTUI(App[None]):
         self._refreshing: bool = False
         self._job_filter: str = ""
         self._selected_job_id: Optional[str] = None
+        self._selected_node_name: Optional[str] = None
+        self._selected_queue_name: Optional[str] = None
         self._detail_source: Optional[str] = None
+        self._detail_panel_enabled: bool = True
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -635,6 +639,7 @@ class PBSTUI(App[None]):
         self._job_index = {job.id: job for job in snapshot.jobs}
         self._node_index = {node.name: node for node in snapshot.nodes}
         self._queue_index = {queue.name: queue for queue in snapshot.queues}
+        self._update_detail_panel(reference_time=snapshot.timestamp)
 
     def _refresh_jobs_table(self) -> None:
         jobs_table = self.query_one(JobsTable)
@@ -643,22 +648,23 @@ class PBSTUI(App[None]):
         reference_time = self._snapshot.timestamp or datetime.now()
         filtered_jobs = self._get_filtered_jobs(reference_time)
         jobs_table.update_jobs(filtered_jobs, reference_time)
-        details = self.query_one(DetailPanel)
         if self._selected_job_id:
             selected_job = next(
                 (job for job in filtered_jobs if job.id == self._selected_job_id),
                 None,
             )
             if selected_job:
-                details.show_job(selected_job, reference_time=reference_time)
+                # Ensure we keep the stored id for later refreshes.
+                self._selected_job_id = selected_job.id
             else:
                 self._selected_job_id = None
                 if self._detail_source == "job":
                     self._detail_source = None
-                    details.hide()
+                    self.query_one(DetailPanel).hide()
         elif self._detail_source == "job":
             self._detail_source = None
-            details.hide()
+            self.query_one(DetailPanel).hide()
+        self._update_detail_panel(reference_time=reference_time)
 
     def _get_filtered_jobs(self, reference_time: datetime) -> list[Job]:
         if self._snapshot is None:
@@ -697,6 +703,12 @@ class PBSTUI(App[None]):
         self.query_one(TabbedContent).active = "queues_tab"
         self.query_one(QueuesTable).focus()
 
+    def action_toggle_detail_panel(self) -> None:
+        """Toggle the visibility of the detail panel."""
+
+        self._detail_panel_enabled = not self._detail_panel_enabled
+        self._update_detail_panel(reference_time=self._snapshot.timestamp if self._snapshot else None)
+
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "jobs_filter":
             self._job_filter = event.value.strip()
@@ -710,10 +722,15 @@ class PBSTUI(App[None]):
             job = self._job_index.get(job_id)
             if job:
                 self._selected_job_id = job.id
+                self._selected_node_name = None
+                self._selected_queue_name = None
                 self._detail_source = "job"
-                self.query_one(DetailPanel).show_job(
-                    job, reference_time=self._snapshot.timestamp
-                )
+                if self._detail_panel_enabled:
+                    self.query_one(DetailPanel).show_job(
+                        job, reference_time=self._snapshot.timestamp
+                    )
+                else:
+                    self.query_one(DetailPanel).hide()
         elif isinstance(event.data_table, NodesTable):
             self._selected_job_id = None
             node_name = str(event.row_key.value if hasattr(event.row_key, "value") else event.row_key)
@@ -721,8 +738,13 @@ class PBSTUI(App[None]):
                 return
             node = self._node_index.get(node_name)
             if node:
+                self._selected_node_name = node.name
+                self._selected_queue_name = None
                 self._detail_source = "node"
-                self.query_one(DetailPanel).show_node(node)
+                if self._detail_panel_enabled:
+                    self.query_one(DetailPanel).show_node(node)
+                else:
+                    self.query_one(DetailPanel).hide()
         elif isinstance(event.data_table, QueuesTable):
             self._selected_job_id = None
             queue_name = str(event.row_key.value if hasattr(event.row_key, "value") else event.row_key)
@@ -730,8 +752,54 @@ class PBSTUI(App[None]):
                 return
             queue = self._queue_index.get(queue_name)
             if queue:
+                self._selected_queue_name = queue.name
+                self._selected_node_name = None
                 self._detail_source = "queue"
-                self.query_one(DetailPanel).show_queue(queue)
+                if self._detail_panel_enabled:
+                    self.query_one(DetailPanel).show_queue(queue)
+                else:
+                    self.query_one(DetailPanel).hide()
+
+    def _update_detail_panel(self, *, reference_time: Optional[datetime] = None) -> None:
+        """Refresh the detail panel based on current selection and visibility."""
+
+        details = self.query_one(DetailPanel)
+
+        if not self._detail_panel_enabled:
+            details.hide()
+            return
+
+        if self._detail_source == "job" and self._selected_job_id and self._snapshot:
+            job = self._job_index.get(self._selected_job_id)
+            if job:
+                details.show_job(job, reference_time=reference_time or self._snapshot.timestamp)
+                return
+            self._selected_job_id = None
+            self._detail_source = None
+        elif self._detail_source == "node" and self._selected_node_name:
+            node = self._node_index.get(self._selected_node_name)
+            if node:
+                details.show_node(node)
+                return
+            self._selected_node_name = None
+            self._detail_source = None
+        elif self._detail_source == "queue" and self._selected_queue_name:
+            queue = self._queue_index.get(self._selected_queue_name)
+            if queue:
+                details.show_queue(queue)
+                return
+            self._selected_queue_name = None
+            self._detail_source = None
+
+        details.hide()
+
+    def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
+        yield from super().get_system_commands(screen)
+        yield SystemCommand(
+            "Toggle detail panel",
+            "Show or hide the detail pane",
+            self.action_toggle_detail_panel,
+        )
 
 
 def _escape_markdown_cell(text: str) -> str:

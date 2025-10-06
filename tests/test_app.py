@@ -484,3 +484,52 @@ def test_detail_panel_hides_when_selected_job_disappears():
 
     asyncio.run(interact())
 
+
+def test_detail_panel_toggle_action_restores_content():
+    snapshot = sample_snapshot(now=NOW)
+
+    class SingleSnapshotFetcher:
+        async def fetch_snapshot(self):
+            return snapshot
+
+    app = PBSTUI(fetcher=SingleSnapshotFetcher(), refresh_interval=9999)
+
+    async def interact() -> None:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            jobs_table = app.query_one(JobsTable)
+            first_key = jobs_table.ordered_rows[0].key
+            app.post_message(DataTable.RowSelected(jobs_table, 0, first_key))
+            await pilot.pause()
+
+            details = app.query_one(DetailPanel)
+            assert details.display is True
+
+            app.action_toggle_detail_panel()
+            await pilot.pause()
+            assert details.display is False
+
+            app.action_toggle_detail_panel()
+            await pilot.pause()
+            assert details.display is True
+
+    asyncio.run(interact())
+
+
+def test_command_palette_includes_detail_toggle():
+    snapshot = sample_snapshot(now=NOW)
+
+    class SingleSnapshotFetcher:
+        async def fetch_snapshot(self):
+            return snapshot
+
+    app = PBSTUI(fetcher=SingleSnapshotFetcher(), refresh_interval=9999)
+
+    async def interact() -> None:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            commands = list(app.get_system_commands(app.screen))
+            assert any(command.title == "Toggle detail panel" for command in commands)
+
+    asyncio.run(interact())
+
