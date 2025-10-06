@@ -145,6 +145,20 @@ def test_format_job_table_cells_matches_columns():
     assert list(cells.keys()) == [label for label, _ in JOB_TABLE_COLUMNS]
 
 
+def test_app_registers_custom_themes():
+    app = PBSTUI()
+    assert "pbs-dark" in app.available_themes
+    assert "pbs-light" in app.available_themes
+    assert app.theme == "pbs-dark"
+
+
+def test_detail_toggle_binding_exposed():
+    assert any(
+        binding[1] == "toggle_detail_panel" and binding[0] == "d"
+        for binding in PBSTUI.BINDINGS
+    )
+
+
 # def test_run_inline_displays_sample_job_data(monkeypatch, capsys):
 #     out, err = _inline_output(monkeypatch, capsys)
 #     assert "PBS Jobs as of" in out

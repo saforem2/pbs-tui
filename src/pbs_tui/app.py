@@ -29,6 +29,7 @@ from textual.widgets import (
     TabPane,
     TabbedContent,
 )
+from textual.theme import Theme
 from textual.pilot import Pilot
 
 from .data import Job, Node, Queue, SchedulerSnapshot
@@ -52,6 +53,39 @@ JOB_STATE_LABELS = {
     "T": "Transit",
     "W": "Waiting",
 }
+
+
+PBS_DARK_THEME = Theme(
+    "pbs-dark",
+    primary="#4DB2FF",
+    secondary="#89DDFF",
+    warning="#F9E2AF",
+    error="#F38BA8",
+    success="#94E2D5",
+    accent="#F8BD96",
+    foreground="#E6EEF8",
+    background="#0B1220",
+    surface="#141B2D",
+    panel="#141B2D",
+    boost="#CBA6F7",
+    dark=True,
+)
+
+PBS_LIGHT_THEME = Theme(
+    "pbs-light",
+    primary="#1F5BA5",
+    secondary="#0284C7",
+    warning="#D97706",
+    error="#B91C1C",
+    success="#15803D",
+    accent="#7C3AED",
+    foreground="#172033",
+    background="#F3F7FD",
+    surface="#FFFFFF",
+    panel="#FFFFFF",
+    boost="#4338CA",
+    dark=False,
+)
 
 
 
@@ -470,6 +504,12 @@ This dashboard provides a quick overview of the PBS scheduler state.
 - **n**: Focus the Nodes tab
 - **u**: Focus the Queues tab
 - **Ctrl+P**: Toggle the command palette
+- **d**: Toggle the detail panel
+
+## Themes
+
+Use the command palette's **Change theme** action to switch between the bundled
+`pbs-dark`/`pbs-light` themes or Textual's defaults.
 
 ## Jobs table filtering
 
@@ -549,6 +589,7 @@ class PBSTUI(App[None]):
         ("n", "focus_nodes", "Focus nodes"),
         ("u", "focus_queues", "Focus queues"),
         ("ctrl+p", "command_palette", "Command palette"),
+        ("d", "toggle_detail_panel", "Toggle detail panel"),
     ]
 
     refresh_interval: float = 30.0
@@ -560,6 +601,9 @@ class PBSTUI(App[None]):
         refresh_interval: float = 30.0,
     ) -> None:
         super().__init__()
+        self.register_theme(PBS_DARK_THEME)
+        self.register_theme(PBS_LIGHT_THEME)
+        self.theme = PBS_DARK_THEME.name
         self.fetcher = fetcher or PBSDataFetcher()
         self.refresh_interval = refresh_interval
         self._snapshot: Optional[SchedulerSnapshot] = None

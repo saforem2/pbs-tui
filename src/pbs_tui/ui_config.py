@@ -7,6 +7,7 @@ JOB_TABLE_COLUMNS: list[tuple[str, str]] = [
     ("User", "left"),
     ("Account", "left"),
     ("JobName", "left"),
+    ("Queue", "left"),
     ("WallTime", "right"),
     ("QueuedTime", "right"),
     ("EstStart", "left"),
@@ -14,7 +15,6 @@ JOB_TABLE_COLUMNS: list[tuple[str, str]] = [
     ("TimeRemaining", "right"),
     ("Nodes", "right"),
     ("State", "left"),
-    ("Queue", "left"),
 ]
 
 __all__ = ["JOB_TABLE_COLUMNS"]
