@@ -1,3 +1,4 @@
+from collections import deque
 from datetime import datetime, timezone
 
 import re
@@ -468,13 +469,12 @@ def test_detail_panel_hides_when_selected_job_disappears():
 
     class CyclingFetcher:
         def __init__(self) -> None:
-            self.calls = 0
+            self._snapshots = deque((snapshot, empty_snapshot))
 
         async def fetch_snapshot(self):
-            self.calls += 1
-            if self.calls == 1:
-                return snapshot
-            return empty_snapshot
+            current = self._snapshots[0]
+            self._snapshots.rotate(-1)
+            return current
 
     app = PBSTUI(fetcher=CyclingFetcher(), refresh_interval=9999)
 

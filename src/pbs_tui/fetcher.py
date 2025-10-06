@@ -132,9 +132,11 @@ def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
-def _clean_str(value: Optional[str]) -> Optional[str]:
+def _clean_str(value: Optional[object]) -> Optional[str]:
     if value is None:
         return None
+    if not isinstance(value, str):
+        value = str(value)
     cleaned = value.strip()
     return cleaned or None
 
@@ -148,6 +150,54 @@ def _collect_child_text(element: Optional[ET.Element]) -> Dict[str, str]:
         text = child.text.strip() if child.text else ""
         result[key] = text
     return result
+
+
+FieldSpec = Tuple[str, Sequence[str], Callable[[Optional[str]], object]]
+
+
+def _first_present(values: Iterable[Optional[str]]) -> Optional[str]:
+    for candidate in values:
+        if candidate is None:
+            continue
+        stripped = candidate.strip()
+        if stripped:
+            return stripped
+    return None
+
+
+def _collect_fields_from_element(
+    element: ET.Element, specs: Sequence[FieldSpec]
+) -> Dict[str, object]:
+    data: Dict[str, object] = {}
+    for attribute, tags, transform in specs:
+        raw_value = _first_present(element.findtext(tag) for tag in tags)
+        data[attribute] = transform(raw_value)
+    return data
+
+
+def _collect_fields_from_mapping(
+    mapping: Dict[str, str], specs: Sequence[FieldSpec]
+) -> Dict[str, object]:
+    data: Dict[str, object] = {}
+    for attribute, keys, transform in specs:
+        raw_value = _first_present(mapping.get(key) for key in keys)
+        data[attribute] = transform(raw_value)
+    return data
+
+
+_JOB_FIELD_SPECS: Sequence[FieldSpec] = (
+    ("account", ("Account_Name", "account", "Account", "project"), _clean_str),
+    ("queue_time", ("qtime", "queue_time", "Queue_Time"), _parse_timestamp),
+    ("eligible_time", ("etime", "eligible_time"), _parse_timestamp),
+    (
+        "estimated_start_time",
+        ("estimated.start_time", "estimated_start_time", "estimatedStartTime", "estimated.starttime"),
+        _parse_timestamp,
+    ),
+    ("location", ("job_location", "Job_Location", "location", "Location"), _clean_str),
+    ("comment", ("comment", "sched_comment"), _clean_str),
+    ("exit_status", ("Exit_status", "exit_status"), _clean_str),
+)
 
 
 class PBSDataFetcher:
@@ -322,6 +372,7 @@ class PBSDataFetcher:
             job_id = job_el.findtext("Job_Id", "").strip()
             if not job_id:
                 continue
+            field_values = _collect_fields_from_element(job_el, _JOB_FIELD_SPECS)
             job = Job(
                 id=job_id,
                 name=job_el.findtext("Job_Name", "").strip(),
@@ -329,24 +380,12 @@ class PBSDataFetcher:
                 queue=job_el.findtext("queue", "").strip(),
                 state=job_el.findtext("job_state", "").strip(),
                 exec_host=(job_el.findtext("exec_host") or "").strip() or None,
-                account=_clean_str(
-                    job_el.findtext("Account_Name")
-                    or job_el.findtext("account")
-                    or job_el.findtext("Account")
-                ),
                 create_time=_parse_timestamp(job_el.findtext("ctime")),
-                queue_time=_parse_timestamp(job_el.findtext("qtime")),
-                eligible_time=_parse_timestamp(job_el.findtext("etime")),
                 start_time=_parse_timestamp(
                     job_el.findtext("start_time")
                     or job_el.findtext("stime")
                 ),
                 end_time=_parse_timestamp(job_el.findtext("comp_time") or job_el.findtext("mtime")),
-                estimated_start_time=_parse_timestamp(
-                    job_el.findtext("estimated.start_time")
-                    or job_el.findtext("estimated_start_time")
-                    or job_el.findtext("estimatedStartTime")
-                ),
                 walltime=(
                     job_el.findtext("Resource_List/walltime")
                     or job_el.findtext("resources_default/walltime")
@@ -354,9 +393,7 @@ class PBSDataFetcher:
                 nodes=job_el.findtext("Resource_List/nodes"),
                 resources_requested=_collect_child_text(job_el.find("Resource_List")),
                 resources_used=_collect_child_text(job_el.find("resources_used")),
-                comment=_clean_str(job_el.findtext("comment") or job_el.findtext("sched_comment")),
-                location=_clean_str(job_el.findtext("job_location") or job_el.findtext("location")),
-                exit_status=_clean_str(job_el.findtext("Exit_status")),
+                **field_values,
             )
             jobs.append(job)
         return jobs
@@ -515,36 +552,7 @@ class PBSDataFetcher:
             if key.startswith("resources_used.") and "." in key
         }
 
-        comment = _clean_str(mapping.get("comment") or mapping.get("sched_comment"))
-
-        exit_status = _clean_str(mapping.get("Exit_status") or mapping.get("exit_status"))
-
-        account = _clean_str(
-            mapping.get("Account_Name")
-            or mapping.get("account")
-            or mapping.get("Account")
-            or mapping.get("project")
-        )
-
-        queue_time = _parse_timestamp(
-            mapping.get("qtime") or mapping.get("queue_time") or mapping.get("Queue_Time")
-        )
-
-        eligible_time = _parse_timestamp(mapping.get("etime") or mapping.get("eligible_time"))
-
-        estimated_start_time = _parse_timestamp(
-            mapping.get("estimated.start_time")
-            or mapping.get("Estimated.StartTime")
-            or mapping.get("estimated_start_time")
-            or mapping.get("estimated.starttime")
-        )
-
-        location = _clean_str(
-            mapping.get("job_location")
-            or mapping.get("Job_Location")
-            or mapping.get("location")
-            or mapping.get("Location")
-        )
+        field_values = _collect_fields_from_mapping(mapping, _JOB_FIELD_SPECS)
 
         job = Job(
             id=job_id.strip(),
@@ -555,25 +563,19 @@ class PBSDataFetcher:
             queue=(mapping.get("queue") or mapping.get("Queue") or "").strip(),
             state=(mapping.get("job_state") or mapping.get("jobstate") or "").strip(),
             exec_host=(mapping.get("exec_host") or mapping.get("exec_host2") or "").strip() or None,
-            account=account,
             create_time=_parse_timestamp(mapping.get("ctime")),
-            queue_time=queue_time,
-            eligible_time=eligible_time,
             start_time=_parse_timestamp(
                 mapping.get("start_time")
                 or mapping.get("stime")
             ),
             end_time=_parse_timestamp(mapping.get("comp_time") or mapping.get("mtime")),
-            estimated_start_time=estimated_start_time,
             walltime=resources_requested.get("walltime")
             or mapping.get("walltime")
             or mapping.get("resources_default.walltime"),
             nodes=resources_requested.get("nodes") or mapping.get("nodes"),
             resources_requested=resources_requested,
             resources_used=resources_used,
-            comment=comment,
-            location=location,
-            exit_status=exit_status,
+            **field_values,
         )
         return job
 

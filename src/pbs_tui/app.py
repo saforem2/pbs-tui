@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib
 import os
 import sys
 from collections import Counter
@@ -16,7 +17,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
-from textual.app import App, ComposeResult, SystemCommand
+from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import (
@@ -41,6 +42,10 @@ from .nodes import (
     parse_node_count_spec,
 )
 from .ui_config import JOB_TABLE_COLUMNS
+
+
+_TEXTUAL_APP_MODULE = importlib.import_module("textual.app")
+_SYSTEM_COMMAND_CLS = getattr(_TEXTUAL_APP_MODULE, "SystemCommand", None)
 
 JOB_STATE_LABELS = {
     "B": "Begun",
@@ -150,6 +155,8 @@ def _parse_duration_spec(value: Optional[str]) -> Optional[timedelta]:
             days = int(day_part)
         except ValueError:
             return None
+        if days < 0:
+            return None
         time_part = remainder
     parts = time_part.split(":")
     try:
@@ -157,6 +164,8 @@ def _parse_duration_spec(value: Optional[str]) -> Optional[timedelta]:
     except ValueError:
         return None
     if len(units) > 4:
+        return None
+    if any(unit < 0 for unit in units):
         return None
     if len(units) == 4:
         days += units[0]
@@ -172,6 +181,26 @@ def _parse_duration_spec(value: Optional[str]) -> Optional[timedelta]:
     return timedelta(days=days, hours=hours, minutes=minutes, seconds=seconds)
 
 
+def _normalize_datetimes_for_delta(
+    start: datetime, end: datetime
+) -> tuple[datetime, datetime]:
+    """Normalise *start* and *end* so subtraction is well-defined.
+
+    Both datetimes are converted to timezone-aware UTC values. Naive datetimes
+    are interpreted as UTC to avoid attaching mismatched offsets implicitly.
+    """
+
+    def to_utc(value: datetime) -> datetime:
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        try:
+            return value.astimezone(timezone.utc)
+        except ValueError:
+            return value
+
+    return to_utc(start), to_utc(end)
+
+
 def _job_runtime_delta(job: Job, reference_time: datetime) -> Optional[timedelta]:
     runtime_reference = job.end_time or reference_time
     return job.runtime(runtime_reference)
@@ -182,14 +211,9 @@ def _job_queue_duration(job: Job, reference_time: datetime) -> Optional[timedelt
     if start is None:
         return None
     end = job.start_time or reference_time
-    if start.tzinfo and not end.tzinfo:
-        end = end.replace(tzinfo=start.tzinfo)
-    elif end.tzinfo and not start.tzinfo:
-        start = start.replace(tzinfo=end.tzinfo)
+    start, end = _normalize_datetimes_for_delta(start, end)
     delta = end - start
-    if delta.total_seconds() < 0:
-        return timedelta(seconds=0)
-    return delta
+    return timedelta(seconds=0) if delta.total_seconds() < 0 else delta
 
 
 def _job_time_remaining(
@@ -202,9 +226,7 @@ def _job_time_remaining(
     if runtime is None:
         return walltime
     remaining = walltime - runtime
-    if remaining.total_seconds() < 0:
-        return timedelta(seconds=0)
-    return remaining
+    return timedelta(seconds=0) if remaining.total_seconds() < 0 else remaining
 def job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
     """Return a heuristic ``(node_count, first_node)`` tuple for *job*.
 
@@ -693,11 +715,10 @@ class PBSTUI(App[None]):
         filtered_jobs = self._get_filtered_jobs(reference_time)
         jobs_table.update_jobs(filtered_jobs, reference_time)
         if self._selected_job_id:
-            selected_job = next(
+            if selected_job := next(
                 (job for job in filtered_jobs if job.id == self._selected_job_id),
                 None,
-            )
-            if selected_job:
+            ):
                 # Ensure we keep the stored id for later refreshes.
                 self._selected_job_id = selected_job.id
             else:
@@ -726,11 +747,8 @@ class PBSTUI(App[None]):
         if not terms:
             return True
         cells = format_job_table_cells(job, reference_time)
-        row_values = [value or "" for value in cells.values()]
-        for term in terms:
-            if not any(term in value.lower() for value in row_values):
-                return False
-        return True
+        row_values = [(value or "").lower() for value in cells.values()]
+        return not any(all(term not in value for value in row_values) for term in terms)
 
     async def action_refresh(self) -> None:
         await self.refresh_data()
@@ -813,23 +831,28 @@ class PBSTUI(App[None]):
             details.hide()
             return
 
-        if self._detail_source == "job" and self._selected_job_id and self._snapshot:
-            job = self._job_index.get(self._selected_job_id)
-            if job:
-                details.show_job(job, reference_time=reference_time or self._snapshot.timestamp)
+        if (
+            self._detail_source == "job"
+            and (job_id := self._selected_job_id)
+            and self._snapshot
+        ):
+            if job := self._job_index.get(job_id):
+                details.show_job(
+                    job, reference_time=reference_time or self._snapshot.timestamp
+                )
                 return
             self._selected_job_id = None
             self._detail_source = None
-        elif self._detail_source == "node" and self._selected_node_name:
-            node = self._node_index.get(self._selected_node_name)
-            if node:
+        elif self._detail_source == "node" and (node_name := self._selected_node_name):
+            if node := self._node_index.get(node_name):
                 details.show_node(node)
                 return
             self._selected_node_name = None
             self._detail_source = None
-        elif self._detail_source == "queue" and self._selected_queue_name:
-            queue = self._queue_index.get(self._selected_queue_name)
-            if queue:
+        elif self._detail_source == "queue" and (
+            queue_name := self._selected_queue_name
+        ):
+            if queue := self._queue_index.get(queue_name):
                 details.show_queue(queue)
                 return
             self._selected_queue_name = None
@@ -837,13 +860,14 @@ class PBSTUI(App[None]):
 
         details.hide()
 
-    def get_system_commands(self, screen: Screen) -> Iterable[SystemCommand]:
+    def get_system_commands(self, screen: Screen) -> Iterable[object]:
         yield from super().get_system_commands(screen)
-        yield SystemCommand(
-            "Toggle detail panel",
-            "Show or hide the detail pane",
-            self.action_toggle_detail_panel,
-        )
+        if _SYSTEM_COMMAND_CLS is not None:
+            yield _SYSTEM_COMMAND_CLS(
+                "Toggle detail panel",
+                "Show or hide the detail pane",
+                self.action_toggle_detail_panel,
+            )
 
 
 def _escape_markdown_cell(text: str) -> str:
