@@ -2,11 +2,16 @@ from datetime import datetime, timezone
 
 import re
 
+import asyncio
+
 import pytest
+from textual.widgets import DataTable
 
 from rich.console import Console
 
 from pbs_tui.app import (
+    DetailPanel,
+    JobsTable,
     PBSTUI,
     _env_flag,
     format_job_table_cells,
@@ -412,4 +417,70 @@ def test_snapshot_outputs_handle_malformed_resource_specs():
     _assert_snapshot_row(markdown, rendered, "malformed_2", nodes="-")
     _assert_snapshot_row(markdown, rendered, "malformed_3", nodes="-")
 
+
+def test_detail_panel_hidden_until_job_selected():
+    snapshot = sample_snapshot(now=NOW)
+
+    class SingleSnapshotFetcher:
+        async def fetch_snapshot(self):
+            return snapshot
+
+    app = PBSTUI(fetcher=SingleSnapshotFetcher(), refresh_interval=9999)
+
+    async def interact() -> None:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            details = app.query_one(DetailPanel)
+            assert details.display is False
+
+            jobs_table = app.query_one(JobsTable)
+            assert jobs_table.row_count > 0
+
+            first_key = jobs_table.ordered_rows[0].key
+            app.post_message(DataTable.RowSelected(jobs_table, 0, first_key))
+            await pilot.pause()
+
+            assert details.display is True
+            expected_id = str(first_key.value if hasattr(first_key, "value") else first_key)
+            assert app._selected_job_id == expected_id
+
+    asyncio.run(interact())
+
+
+def test_detail_panel_hides_when_selected_job_disappears():
+    snapshot = sample_snapshot(now=NOW)
+
+    empty_snapshot = SchedulerSnapshot(jobs=[], nodes=[], queues=[], source="test")
+
+    class CyclingFetcher:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def fetch_snapshot(self):
+            self.calls += 1
+            if self.calls == 1:
+                return snapshot
+            return empty_snapshot
+
+    app = PBSTUI(fetcher=CyclingFetcher(), refresh_interval=9999)
+
+    async def interact() -> None:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            jobs_table = app.query_one(JobsTable)
+            assert jobs_table.row_count > 0
+            first_key = jobs_table.ordered_rows[0].key
+            app.post_message(DataTable.RowSelected(jobs_table, 0, first_key))
+            await pilot.pause()
+
+            details = app.query_one(DetailPanel)
+            assert details.display is True
+
+            await app.refresh_data()
+            await pilot.pause()
+
+            assert details.display is False
+            assert app._selected_job_id is None
+
+    asyncio.run(interact())
 

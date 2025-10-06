@@ -301,7 +301,16 @@ class StatusBar(Static):
 class DetailPanel(Static):
     """Show details for the currently selected object."""
 
+    can_focus = True
+
+    def hide(self) -> None:
+        """Hide the panel and clear any existing content."""
+
+        self.display = False
+        self.update("")
+
     def show_job(self, job: Job, *, reference_time: Optional[datetime] = None) -> None:
+        self.display = True
         effective_reference = reference_time or datetime.now(timezone.utc)
         runtime_delta = _job_runtime_delta(job, effective_reference)
         queued_duration = _job_queue_duration(job, effective_reference)
@@ -371,6 +380,7 @@ class DetailPanel(Static):
         self.update(Panel(table, title=f"Job {job.id}", border_style="cyan"))
 
     def show_node(self, node: Node) -> None:
+        self.display = True
         table = Table.grid(padding=(0, 1))
         table.add_column(style="bold green", justify="right")
         table.add_column(justify="left")
@@ -394,6 +404,7 @@ class DetailPanel(Static):
         self.update(Panel(table, title=f"Node {node.name}", border_style="green"))
 
     def show_queue(self, queue: Queue) -> None:
+        self.display = True
         table = Table.grid(padding=(0, 1))
         table.add_column(style="bold magenta", justify="right")
         table.add_column(justify="left")
@@ -421,6 +432,7 @@ class DetailPanel(Static):
         self.update(Panel(table, title=f"Queue {queue.name}", border_style="magenta"))
 
     def show_message(self, message: str) -> None:
+        self.display = True
         self.update(Panel(Text(message), title="Details"))
 
 
@@ -555,6 +567,8 @@ class PBSTUI(App[None]):
         self._queue_index: dict[str, Queue] = {}
         self._refreshing: bool = False
         self._job_filter: str = ""
+        self._selected_job_id: Optional[str] = None
+        self._detail_source: Optional[str] = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -582,6 +596,7 @@ class PBSTUI(App[None]):
     async def on_mount(self) -> None:
         self.set_interval(self.refresh_interval, self.refresh_data)
         await self.refresh_data()
+        self.query_one(DetailPanel).hide()
 
     async def refresh_data(self) -> None:
         if self._refreshing:
@@ -608,19 +623,6 @@ class PBSTUI(App[None]):
                 message_parts.append("; ".join(snapshot.errors))
             status = self.query_one(StatusBar)
             status.update_status(" | ".join(message_parts), severity=severity)
-            details = self.query_one(DetailPanel)
-            reference_time = snapshot.timestamp or datetime.now()
-            filtered_jobs = self._get_filtered_jobs(reference_time)
-            if filtered_jobs:
-                details.show_job(filtered_jobs[0], reference_time=reference_time)
-            elif snapshot.jobs:
-                details.show_message("No jobs match the current filter")
-            elif snapshot.nodes:
-                details.show_node(snapshot.nodes[0])
-            elif snapshot.queues:
-                details.show_queue(snapshot.queues[0])
-            else:
-                details.show_message("No scheduler data available")
         finally:
             self._refreshing = False
 
@@ -641,10 +643,22 @@ class PBSTUI(App[None]):
         reference_time = self._snapshot.timestamp or datetime.now()
         filtered_jobs = self._get_filtered_jobs(reference_time)
         jobs_table.update_jobs(filtered_jobs, reference_time)
-        if not filtered_jobs:
-            self.query_one(DetailPanel).show_message("No jobs match the current filter")
-        else:
-            self.query_one(DetailPanel).show_job(filtered_jobs[0], reference_time=reference_time)
+        details = self.query_one(DetailPanel)
+        if self._selected_job_id:
+            selected_job = next(
+                (job for job in filtered_jobs if job.id == self._selected_job_id),
+                None,
+            )
+            if selected_job:
+                details.show_job(selected_job, reference_time=reference_time)
+            else:
+                self._selected_job_id = None
+                if self._detail_source == "job":
+                    self._detail_source = None
+                    details.hide()
+        elif self._detail_source == "job":
+            self._detail_source = None
+            details.hide()
 
     def _get_filtered_jobs(self, reference_time: datetime) -> list[Job]:
         if self._snapshot is None:
@@ -695,22 +709,28 @@ class PBSTUI(App[None]):
                 return
             job = self._job_index.get(job_id)
             if job:
+                self._selected_job_id = job.id
+                self._detail_source = "job"
                 self.query_one(DetailPanel).show_job(
                     job, reference_time=self._snapshot.timestamp
                 )
         elif isinstance(event.data_table, NodesTable):
+            self._selected_job_id = None
             node_name = str(event.row_key.value if hasattr(event.row_key, "value") else event.row_key)
             if self._snapshot is None:
                 return
             node = self._node_index.get(node_name)
             if node:
+                self._detail_source = "node"
                 self.query_one(DetailPanel).show_node(node)
         elif isinstance(event.data_table, QueuesTable):
+            self._selected_job_id = None
             queue_name = str(event.row_key.value if hasattr(event.row_key, "value") else event.row_key)
             if self._snapshot is None:
                 return
             queue = self._queue_index.get(queue_name)
             if queue:
+                self._detail_source = "queue"
                 self.query_one(DetailPanel).show_queue(queue)
 
 
