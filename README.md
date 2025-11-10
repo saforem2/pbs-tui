@@ -1,20 +1,36 @@
 # PBS Pro Textual TUI
 
+A terminal user interface built with [Textual](https://textual.textualize.io/) for monitoring
+[PBS Pro](https://altair.com/pbs-professional) schedulers at the
+[Argonne Leadership Computing Facility](https://alcf.anl.gov). 
 
+The dashboard surfaces job,
+queue, and node activity in a single view and refreshes itself automatically so operators can
+track workload health in real time.
+
+<center>
+<img width=49% src="https://github.com/user-attachments/assets/49bbdd98-9670-4064-bea1-948dda949b64" /> <img width=49% src="https://github.com/user-attachments/assets/4f1c4503-2478-436e-91da-13c421da7523" /> 
+
+<details closed><summary>more themes:</summary>
+<img alt="catpuccin-latte" width=49% src="https://github.com/user-attachments/assets/cb820657-3e2a-4b39-a83e-974383ad9da4" /> <img alt="tokyo-night" width=49% src="https://github.com/user-attachments/assets/b32b4024-9bb5-4054-8526-4ef46e19b4b5" />
+
+</details>
+</center>
+
+
+<!--
 <center>
 <img width="48%" alt="ScreenShot-2025-09-16-172415@2x" src="https://github.com/user-attachments/assets/0947b9f3-3b55-42b9-8a6d-8e301492b7f7" /> <img width="48%" alt="ScreenShot-2025-09-16-172702@2x" src="https://github.com/user-attachments/assets/c3a5a8c4-3e28-4ec3-b4e4-91438f745ced" />
 </center>
+-->
 
-A terminal user interface built with [Textual](https://textual.textualize.io/) for monitoring
-[PBS Pro](https://altair.com/pbs-professional) schedulers at the
-[Argonne Leadership Computing Facility](https://alcf.anl.gov). The dashboard surfaces job,
-queue, and node activity in a single view and refreshes itself automatically so operators can
-track workload health in real time.
 
 - Try it out!
 
   ```bash
-  uv run --with pbs-tui pbs-tui
+  # if you still haven't installed uv:
+  # curl -LsSf https://astral.sh/uv/install.sh
+  uvx pbs-tui
   ```
 
 ## Features
@@ -126,19 +142,32 @@ attributes.
 
 ## Screenshots
 
+<!--
 - `pbs-tui`:
 
   <img width="2498" height="1828" alt="ScreenShot-2025-09-16-172415@2x" src="https://github.com/user-attachments/assets/419cecb6-25a1-4007-8456-38bd80fb4ae7" />
+-->
+
+- Live filter:
+
+  <img width="3206" height="2482" alt="ScreenShot-2025-11-10-152623@2x" src="https://github.com/user-attachments/assets/e5ee56ac-0498-48db-bf2c-76cd7893e646" />
 
 
 - Keys and Help Panel:
 
-  <img width="2498" height="1828" alt="ScreenShot-2025-09-16-172451@2x" src="https://github.com/user-attachments/assets/d521d137-1135-4503-bcc0-2b9dba35d252" />
+  <img width="3206" height="2482" alt="ScreenShot-2025-11-10-152649@2x" src="https://github.com/user-attachments/assets/48a0d2b3-5795-4e46-80a5-6b46c0ac65bc" />
+
+  <!--<img width="2498" height="1828" alt="ScreenShot-2025-09-16-172451@2x" src="https://github.com/user-attachments/assets/d521d137-1135-4503-bcc0-2b9dba35d252" />-->
   
 - Command palette:
-  
-  <img width="2498" height="1828" alt="ScreenShot-2025-09-16-172546@2x" src="https://github.com/user-attachments/assets/5804c99a-621a-4cce-adde-092f6d324824" />
+
+  <img width="3206" height="2482" alt="ScreenShot-2025-11-10-152636@2x" src="https://github.com/user-attachments/assets/7d9a8929-72b9-4403-ae73-4e5930ca4b17" />
+
+  <!--<img width="2498" height="1828" alt="ScreenShot-2025-09-16-172546@2x" src="https://github.com/user-attachments/assets/5804c99a-621a-4cce-adde-092f6d324824" />-->
 
 - theme support:
-  
+
+  <img width="3206" height="2482" alt="ScreenShot-2025-11-10-152753" src="https://github.com/user-attachments/assets/be468113-037b-492e-bf26-e946505f3b89" />
+  <!--
   <img width="2498" height="1828" alt="ScreenShot-2025-09-16-172702@2x" src="https://github.com/user-attachments/assets/d4009439-2ea7-49f5-9c75-5d25f7b13771" />
+  -->
