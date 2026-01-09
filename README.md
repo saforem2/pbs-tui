@@ -29,7 +29,7 @@ track workload health in real time.
 
   ```bash
   # if you still haven't installed uv:
-  # curl -LsSf https://astral.sh/uv/install.sh
+  # curl -LsSf https://astral.sh/uv/install.sh | sh
   uvx pbs-tui
   ```
 
@@ -89,7 +89,7 @@ faster polling loop.
 | `n` | Focus the nodes table  |
 | `u` | Focus the queues table |
 
-Use the arrow keys/`PageUp`/`PageDown` to move through rows once a table has focus.
+Use tab and the arrow keys/`PageUp`/`PageDown` to move through rows once a table has focus.
 
 ### Sample mode
 
@@ -148,7 +148,7 @@ attributes.
   <img width="2498" height="1828" alt="ScreenShot-2025-09-16-172415@2x" src="https://github.com/user-attachments/assets/419cecb6-25a1-4007-8456-38bd80fb4ae7" />
 -->
 
-- Live filter:
+- Live filter: (use tab to navigate to filter pane)
 
   <img width="3206" height="2482" alt="ScreenShot-2025-11-10-152623@2x" src="https://github.com/user-attachments/assets/e5ee56ac-0498-48db-bf2c-76cd7893e646" />
 
