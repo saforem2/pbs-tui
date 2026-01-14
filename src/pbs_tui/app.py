@@ -542,28 +542,6 @@ JOB_STATE_COLORS = {
 }
 
 
-class JobCard(Static):
-    """Individual job card for the grid view."""
-
-    can_focus = True
-
-    def __init__(self, job: Job, **kwargs) -> None:
-        super().__init__(**kwargs)
-        self.job = job
-
-    def compose(self) -> ComposeResult:
-        state_color = JOB_STATE_COLORS.get(self.job.state, "white")
-        state_label = JOB_STATE_LABELS.get(self.job.state, self.job.state)
-
-        job_id_display = _truncate_job_id(self.job.id)
-        content = f"[bold]{job_id_display}[/]\n"
-        content += f"[{state_color}]●[/] {state_label}\n"
-        content += f"User: {self.job.user or '-'}\n"
-        content += f"Queue: {self.job.queue or '-'}"
-
-        yield Static(content, id=f"job_card_content_{self.job.id}")
-
-
 class JobGridView(Static):
     """Scrollable, paginated grid view of jobs inspired by Gronkulator."""
 

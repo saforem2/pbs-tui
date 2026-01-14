@@ -104,18 +104,3 @@ Footer {
 #job_grid {
     padding: 1;
 }
-
-.job-card {
-    border: solid $primary;
-    padding: 1;
-    margin: 1;
-    width: 1fr;
-}
-
-.job-card:hover {
-    border: solid $accent;
-}
-
-.job-card:focus {
-    border: solid $secondary;
-}
