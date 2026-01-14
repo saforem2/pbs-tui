@@ -18,6 +18,14 @@ Header {
     padding-right: 1;
 }
 
+#right_panel {
+    layout: vertical;
+    width: 1fr;
+    height: 1fr;
+    min-width: 25;
+    max-width: 40;
+}
+
 #summary {
     border: round $surface;
     padding: 0 1;
@@ -49,11 +57,9 @@ DataTable {
 }
 
 #details {
-    width: 2fr;
     height: 1fr;
     border: tall $surface;
     padding: 1 2;
-    margin-left: 1;
     overflow-x: auto;
     overflow-y: auto;
 }
@@ -69,4 +75,47 @@ DataTable {
 }
 
 Footer {
+}
+
+/* Job Grid View Styles */
+#job_grid_container {
+    layout: vertical;
+    height: 1fr;
+    padding: 1;
+}
+
+#grid_controls {
+    dock: top;
+    height: auto;
+    margin-bottom: 1;
+    align: center middle;
+}
+
+#grid_controls Button {
+    margin: 0 1;
+    min-width: 4;
+}
+
+#grid_scroll {
+    height: 1fr;
+    overflow-y: auto;
+}
+
+#job_grid {
+    padding: 1;
+}
+
+.job-card {
+    border: solid $primary;
+    padding: 1;
+    margin: 1;
+    width: 1fr;
+}
+
+.job-card:hover {
+    border: solid $accent;
+}
+
+.job-card:focus {
+    border: solid $secondary;
 }

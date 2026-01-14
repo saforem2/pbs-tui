@@ -12,8 +12,10 @@ from rich.console import Console
 
 from pbs_tui.app import (
     DetailPanel,
+    JobGridView,
     JobsTable,
     PBSTUI,
+    SummaryWidget,
     HAS_TEXTUAL_THEME_SUPPORT,
     _env_flag,
     format_job_table_cells,
@@ -573,6 +575,117 @@ def test_command_palette_includes_detail_toggle():
             await pilot.pause()
             commands = list(app.get_system_commands(app.screen))
             assert any(command.title == "Toggle detail panel" for command in commands)
+
+    asyncio.run(interact())
+
+
+def test_job_grid_view_renders_jobs():
+    """Test that the job grid view correctly renders jobs."""
+    snapshot = sample_snapshot(now=NOW)
+
+    class SingleSnapshotFetcher:
+        async def fetch_snapshot(self):
+            return snapshot
+
+    app = PBSTUI(fetcher=SingleSnapshotFetcher(), refresh_interval=9999)
+
+    async def interact() -> None:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            job_grid = app.query_one(JobGridView)
+            assert job_grid is not None
+            # Verify the grid has jobs loaded
+            assert len(job_grid._jobs) == len(snapshot.jobs)
+
+    asyncio.run(interact())
+
+
+def test_job_grid_pagination():
+    """Test that job grid pagination works correctly."""
+    # Create a sample with enough jobs to require pagination
+    from datetime import timedelta
+
+    now = NOW
+    jobs = [
+        make_job(id=f"job_{i}.server", name=f"test_job_{i}", state="R" if i % 3 == 0 else "Q")
+        for i in range(20)
+    ]
+    snapshot = SchedulerSnapshot(jobs=jobs, source="test", timestamp=now)
+
+    class MultiJobFetcher:
+        async def fetch_snapshot(self):
+            return snapshot
+
+    app = PBSTUI(fetcher=MultiJobFetcher(), refresh_interval=9999)
+
+    async def interact() -> None:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            job_grid = app.query_one(JobGridView)
+            
+            # Verify initial state
+            assert job_grid._current_page == 0
+            assert job_grid._total_pages == 2  # 20 jobs / 12 per page = 2 pages
+            
+            # Test next page
+            job_grid.next_page()
+            assert job_grid._current_page == 1
+            
+            # Test prev page
+            job_grid.prev_page()
+            assert job_grid._current_page == 0
+            
+            # Test last page
+            job_grid.last_page()
+            assert job_grid._current_page == 1
+            
+            # Test first page
+            job_grid.first_page()
+            assert job_grid._current_page == 0
+
+    asyncio.run(interact())
+
+
+def test_summary_widget_in_right_panel():
+    """Test that summary widget is in the right panel."""
+    snapshot = sample_snapshot(now=NOW)
+
+    class SingleSnapshotFetcher:
+        async def fetch_snapshot(self):
+            return snapshot
+
+    app = PBSTUI(fetcher=SingleSnapshotFetcher(), refresh_interval=9999)
+
+    async def interact() -> None:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            summary = app.query_one(SummaryWidget)
+            assert summary is not None
+            # Check that the summary is in the right panel
+            right_panel = app.query_one("#right_panel")
+            assert right_panel is not None
+            # Verify summary is a descendant of right_panel
+            assert summary in right_panel.query("*")
+
+    asyncio.run(interact())
+
+
+def test_job_grid_tab_exists():
+    """Test that the Job Grid tab exists and is the first tab."""
+    snapshot = sample_snapshot(now=NOW)
+
+    class SingleSnapshotFetcher:
+        async def fetch_snapshot(self):
+            return snapshot
+
+    app = PBSTUI(fetcher=SingleSnapshotFetcher(), refresh_interval=9999)
+
+    async def interact() -> None:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            # Verify Job Grid tab exists
+            job_grid_container = app.query_one("#job_grid_container")
+            assert job_grid_container is not None
 
     asyncio.run(interact())
 

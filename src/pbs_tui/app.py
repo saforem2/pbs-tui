@@ -18,9 +18,10 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.screen import Screen
 from textual.widgets import (
+    Button,
     DataTable,
     Footer,
     Header,
@@ -308,7 +309,7 @@ def format_job_table_cells(job: Job, reference_time: datetime) -> dict[str, Opti
 
 
 class SummaryWidget(Static):
-    """Display aggregate scheduler information."""
+    """Display aggregate scheduler information in a vertical layout for sidebar."""
 
     def update_from_snapshot(self, snapshot: SchedulerSnapshot) -> None:
         job_counts = Counter(job.state for job in snapshot.jobs if job.state)
@@ -350,15 +351,12 @@ class SummaryWidget(Static):
                 label = JOB_STATE_LABELS.get(state_code, state_code)
                 queue_table.add_row(f"{label}: {queue_job_counts[state_code]}")
 
+        # Vertical layout for sidebar - stack panels vertically
         grid = Table.grid(expand=True)
         grid.add_column()
-        grid.add_column()
-        grid.add_column()
-        grid.add_row(
-            Panel(job_table, title="Jobs", border_style="cyan"),
-            Panel(node_table, title="Nodes", border_style="green"),
-            Panel(queue_table, title="Queues", border_style="magenta"),
-        )
+        grid.add_row(Panel(job_table, title="Jobs", border_style="cyan"))
+        grid.add_row(Panel(node_table, title="Nodes", border_style="green"))
+        grid.add_row(Panel(queue_table, title="Queues", border_style="magenta"))
         self.update(grid)
 
 
@@ -530,6 +528,166 @@ class JobsTable(DataTable):
             self.add_row(*(_format_cell_value(value) for value in ordered), key=job.id)
 
 
+# Colors for job states in the grid view
+JOB_STATE_COLORS = {
+    "R": "green",
+    "Q": "yellow",
+    "H": "red",
+    "S": "blue",
+    "E": "cyan",
+    "W": "magenta",
+    "F": "dim white",
+    "T": "dim cyan",
+    "B": "bright_green",
+}
+
+
+class JobCard(Static):
+    """Individual job card for the grid view."""
+
+    can_focus = True
+
+    def __init__(self, job: Job, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.job = job
+
+    def compose(self) -> ComposeResult:
+        state_color = JOB_STATE_COLORS.get(self.job.state, "white")
+        state_label = JOB_STATE_LABELS.get(self.job.state, self.job.state)
+
+        job_id_display = _truncate_job_id(self.job.id)
+        content = f"[bold]{job_id_display}[/]\n"
+        content += f"[{state_color}]●[/] {state_label}\n"
+        content += f"User: {self.job.user or '-'}\n"
+        content += f"Queue: {self.job.queue or '-'}"
+
+        yield Static(content, id=f"job_card_content_{self.job.id}")
+
+
+class JobGridView(Static):
+    """Scrollable, paginated grid view of jobs inspired by Gronkulator."""
+
+    JOBS_PER_PAGE = 12
+    JOBS_PER_ROW = 4
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._jobs: list[Job] = []
+        self._current_page = 0
+        self._total_pages = 0
+
+    def update_jobs(self, jobs: Iterable[Job], reference_time: datetime) -> None:
+        """Update the jobs displayed in the grid view."""
+        self._jobs = list(_sort_jobs_for_display(jobs))
+        self._total_pages = max(1, (len(self._jobs) + self.JOBS_PER_PAGE - 1) // self.JOBS_PER_PAGE)
+        self._current_page = min(self._current_page, self._total_pages - 1)
+        self._render_grid()
+
+    def _get_current_page_jobs(self) -> list[Job]:
+        """Get jobs for the current page."""
+        start = self._current_page * self.JOBS_PER_PAGE
+        end = start + self.JOBS_PER_PAGE
+        return self._jobs[start:end]
+
+    def _render_grid(self) -> None:
+        """Render the job grid as a Rich table with job cards."""
+        page_jobs = self._get_current_page_jobs()
+
+        if not page_jobs:
+            self.update(Text("No jobs to display", style="italic"))
+            return
+
+        grid = Table.grid(expand=True, padding=1)
+        for _ in range(self.JOBS_PER_ROW):
+            grid.add_column()
+
+        rows_data: list[list[Panel]] = []
+        current_row: list[Panel] = []
+
+        for job in page_jobs:
+            state_color = JOB_STATE_COLORS.get(job.state, "white")
+            state_label = JOB_STATE_LABELS.get(job.state, job.state)
+            job_id_display = _truncate_job_id(job.id)
+
+            content = Text()
+            content.append(f"{job_id_display}\n", style="bold")
+            content.append("● ", style=state_color)
+            content.append(f"{state_label}\n")
+            content.append(f"User: {job.user or '-'}\n", style="dim")
+            content.append(f"Queue: {job.queue or '-'}", style="dim")
+
+            panel = Panel(
+                content,
+                border_style=state_color,
+                title=None,
+                expand=True,
+            )
+            current_row.append(panel)
+
+            if len(current_row) == self.JOBS_PER_ROW:
+                rows_data.append(current_row)
+                current_row = []
+
+        if current_row:
+            while len(current_row) < self.JOBS_PER_ROW:
+                current_row.append(Panel("", border_style="dim"))
+            rows_data.append(current_row)
+
+        for row in rows_data:
+            grid.add_row(*row)
+
+        pagination_info = Text(
+            f"\nPage {self._current_page + 1} of {self._total_pages} "
+            f"({len(self._jobs)} jobs total)",
+            style="dim italic",
+            justify="center",
+        )
+
+        output = Table.grid(expand=True)
+        output.add_column()
+        output.add_row(grid)
+        output.add_row(pagination_info)
+
+        self.update(output)
+
+    def next_page(self) -> None:
+        """Navigate to the next page."""
+        if self._current_page < self._total_pages - 1:
+            self._current_page += 1
+            self._render_grid()
+
+    def prev_page(self) -> None:
+        """Navigate to the previous page."""
+        if self._current_page > 0:
+            self._current_page -= 1
+            self._render_grid()
+
+    def first_page(self) -> None:
+        """Navigate to the first page."""
+        if self._current_page != 0:
+            self._current_page = 0
+            self._render_grid()
+
+    def last_page(self) -> None:
+        """Navigate to the last page."""
+        if self._current_page != self._total_pages - 1:
+            self._current_page = self._total_pages - 1
+            self._render_grid()
+
+
+class JobGridContainer(Vertical):
+    """Container for the job grid view with pagination controls."""
+
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="grid_controls"):
+            yield Button("◀◀", id="first_page", variant="default")
+            yield Button("◀", id="prev_page", variant="default")
+            yield Button("▶", id="next_page", variant="default")
+            yield Button("▶▶", id="last_page", variant="default")
+        with ScrollableContainer(id="grid_scroll"):
+            yield JobGridView(id="job_grid")
+
+
 class HelpPanel(Static):
     """Display application help and key bindings."""
 
@@ -553,12 +711,30 @@ This dashboard provides a quick overview of the PBS scheduler state.
 Use the command palette's **Change theme** action to switch between the bundled
 `pbs-dark`/`pbs-light` themes or Textual's defaults.
 
+## Job Grid View
+
+The **Job Grid** tab displays jobs as color-coded cards for quick visual status:
+
+- **Green**: Running jobs
+- **Yellow/Orange**: Queued jobs
+- **Red**: Held jobs
+
+Use the pagination buttons (◀◀ ◀ ▶ ▶▶) to navigate through pages of jobs.
+
 ## Jobs table filtering
 
 Use the **Filter jobs** input above the Jobs table to narrow results. Type one or
 more search terms; each term must match a value from any column. For example,
 enter `running` to show only running jobs or `alice gpu` to show jobs that match
 both terms across all columns.
+
+## Sidebar Summary
+
+The right sidebar shows summary statistics for:
+
+- **Jobs**: Total count and breakdown by state
+- **Nodes**: Total count and breakdown by state
+- **Queues**: Total count, enabled/started status, and job counts
 
 ## Details panel
 
@@ -665,8 +841,9 @@ class PBSTUI(App[None]):
         yield Header(show_clock=True)
         with Horizontal(id="main"):
             with Vertical(id="left_panel"):
-                yield SummaryWidget(id="summary")
                 with TabbedContent(id="tabs"):
+                    with TabPane("Job Grid", id="job_grid_tab"):
+                        yield JobGridContainer(id="job_grid_container")
                     with TabPane("Jobs", id="jobs_tab"):
                         with Vertical(id="jobs_tab_content"):
                             yield Input(
@@ -680,7 +857,9 @@ class PBSTUI(App[None]):
                         yield QueuesTable(id="queues_table")
                     with TabPane("Help", id="help_tab"):
                         yield HelpPanel(id="help_panel")
-            yield DetailPanel(id="details")
+            with Vertical(id="right_panel"):
+                yield SummaryWidget(id="summary")
+                yield DetailPanel(id="details")
         yield StatusBar(id="status")
         yield Footer()
 
@@ -720,9 +899,13 @@ class PBSTUI(App[None]):
     def _update_tables(self, snapshot: SchedulerSnapshot) -> None:
         nodes_table = self.query_one(NodesTable)
         queues_table = self.query_one(QueuesTable)
+        job_grid = self.query_one(JobGridView)
         self._refresh_jobs_table()
         nodes_table.update_nodes(snapshot.nodes)
         queues_table.update_queues(snapshot.queues)
+        # Update the job grid view with all jobs (not filtered)
+        reference_time = snapshot.timestamp or datetime.now()
+        job_grid.update_jobs(snapshot.jobs, reference_time)
         self._job_index = {job.id: job for job in snapshot.jobs}
         self._node_index = {node.name: node for node in snapshot.nodes}
         self._queue_index = {queue.name: queue for queue in snapshot.queues}
@@ -796,6 +979,18 @@ class PBSTUI(App[None]):
         if event.input.id == "jobs_filter":
             self._job_filter = event.value.strip()
             self._refresh_jobs_table()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle pagination button presses for the job grid."""
+        job_grid = self.query_one(JobGridView)
+        if event.button.id == "first_page":
+            job_grid.first_page()
+        elif event.button.id == "prev_page":
+            job_grid.prev_page()
+        elif event.button.id == "next_page":
+            job_grid.next_page()
+        elif event.button.id == "last_page":
+            job_grid.last_page()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if isinstance(event.data_table, JobsTable):
