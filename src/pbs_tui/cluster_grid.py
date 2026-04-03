@@ -50,7 +50,8 @@ AGGREGATED_QUEUE_STYLES: Dict[str, str] = {
 
 _AGGREGATED_QUEUE_DEFAULT_STYLE = "on color(59)"  # dark olive grey
 _EMPTY_STYLE = "on grey15"
-_BLOCK_CHAR = " "
+_BLOCK_CHAR = " "         # solid fill (space with background) for jobs
+_QUEUE_GRID_CHAR = "░"    # textured fill for aggregated queues in the grid
 
 # Legend swatches: jobs get solid ██, queues get striped ░░ to visually separate
 _JOB_SWATCH = "██"
@@ -184,7 +185,8 @@ def _build_grid(
     large_queue_jobs.sort(key=lambda x: x[1], reverse=True)
 
     # ── assign cells ────────────────────────────────────────────────
-    cell_styles: List[str] = [_EMPTY_STYLE] * total_cells
+    # Each cell is (bg_style, char) — jobs use solid blocks, queues use patterns
+    cell_data: List[Tuple[str, str]] = [(_EMPTY_STYLE, _BLOCK_CHAR)] * total_cells
     current = 0
 
     legend_entries: List[Tuple[str, str, str, int, str]] = []
@@ -194,20 +196,20 @@ def _build_grid(
         cells_needed = max(1, int(nc / nodes_per_cell))
         for _ in range(cells_needed):
             if current < total_cells:
-                cell_styles[current] = style
+                cell_data[current] = (style, _BLOCK_CHAR)
                 current += 1
         remaining = _time_remaining(job, ref)
         time_str = _format_remaining(remaining)
         legend_entries.append((style, job.user, job.queue, nc, time_str))
 
-    # Aggregated queues
+    # Aggregated queues — use pattern character in the grid
     agg_legend: List[Tuple[str, str, int]] = []
     for queue_name, nodes in agg_queue_nodes.items():
         style = AGGREGATED_QUEUE_STYLES.get(queue_name, _AGGREGATED_QUEUE_DEFAULT_STYLE)
         cells_needed = max(1, int(nodes / nodes_per_cell))
         for _ in range(cells_needed):
             if current < total_cells:
-                cell_styles[current] = style
+                cell_data[current] = (style, _QUEUE_GRID_CHAR)
                 current += 1
         agg_legend.append((style, queue_name, nodes))
 
@@ -262,7 +264,8 @@ def _build_grid(
         grid.append(_V, style=_BORDER)
         for col in range(grid_width):
             idx = row * grid_width + col
-            grid.append(_BLOCK_CHAR, style=cell_styles[idx])
+            style, char = cell_data[idx]
+            grid.append(char, style=style)
         grid.append(_V, style=_BORDER)
         grid.append("\n")
 
