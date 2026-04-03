@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
+from rich.console import Group
 from rich.table import Table
 from rich.text import Text
 from textual.widgets import Static
@@ -15,32 +16,35 @@ from .nodes import parse_node_count_spec, extract_exec_host_nodes, extract_reque
 
 # ── colour palette ──────────────────────────────────────────────────────
 
-# Individual job colours (Rich style strings) — high contrast, ordered
+# Individual job colours — high contrast, ordered for visual distinction
 JOB_STYLES = [
-    "on blue",
-    "on red",
-    "on magenta",
-    "on bright_yellow",
-    "on bright_red",
-    "on bright_blue",
-    "on white",
-    "on bright_magenta",
+    "on dodger_blue2",
+    "on red3",
+    "on dark_magenta",
+    "on dark_orange",
+    "on chartreuse3",
+    "on deep_sky_blue1",
+    "on medium_violet_red",
+    "on gold1",
+    "on turquoise2",
+    "on indian_red",
+    "on orchid",
+    "on spring_green2",
 ]
 
 # Aggregated-queue colours
 AGGREGATED_QUEUE_STYLES: Dict[str, str] = {
     "debug": "on yellow",
     "debug-scaling": "on bright_yellow",
-    "preemptable": "on color(240)",
+    "preemptable": "on grey50",
     "demand": "on bright_magenta",
     "tiny": "on bright_cyan",
     "small": "on cyan",
     "medium": "on bright_green",
 }
 
-_AGGREGATED_QUEUE_DEFAULT_STYLE = "on color(236)"
-_EMPTY_STYLE = "on color(236)"
-_BORDER_STYLE = "bold"
+_AGGREGATED_QUEUE_DEFAULT_STYLE = "on grey30"
+_EMPTY_STYLE = "on grey15"
 _BLOCK_CHAR = " "
 
 # Queues whose running jobs are always merged into a single coloured block
@@ -130,13 +134,22 @@ def _format_remaining(td: Optional[timedelta]) -> str:
 
 # ── grid building ───────────────────────────────────────────────────────
 
+# Unicode box-drawing
+_TL = "╔"
+_TR = "╗"
+_BL = "╚"
+_BR = "╝"
+_H = "═"
+_V = "║"
+_BORDER = "dim"
+
 
 def _build_grid(
     snapshot: SchedulerSnapshot,
     grid_width: int = 100,
-    grid_height: int = 12,
-) -> Tuple[Text, Text]:
-    """Return ``(grid_text, legend_text)`` Rich Text objects."""
+    grid_height: int = 14,
+) -> Group:
+    """Return a Rich renderable with header, grid, and legend."""
 
     total_nodes = max(len(snapshot.nodes), 1)
     total_cells = grid_width * grid_height
@@ -164,13 +177,10 @@ def _build_grid(
     cell_styles: List[str] = [_EMPTY_STYLE] * total_cells
     current = 0
 
-    # Assign colours to individual large-queue jobs
-    job_style_map: Dict[str, str] = {}
-    legend_entries: List[Tuple[str, str, str, int, str]] = []  # (style, user, queue, nodes, time_str)
+    legend_entries: List[Tuple[str, str, str, int, str]] = []
 
     for idx, (job, nc) in enumerate(large_queue_jobs):
         style = JOB_STYLES[idx % len(JOB_STYLES)]
-        job_style_map[job.id] = style
         cells_needed = max(1, int(nc / nodes_per_cell))
         for _ in range(cells_needed):
             if current < total_cells:
@@ -181,7 +191,7 @@ def _build_grid(
         legend_entries.append((style, job.user, job.queue, nc, time_str))
 
     # Aggregated queues
-    agg_legend: List[Tuple[str, str, int]] = []  # (style, queue, nodes)
+    agg_legend: List[Tuple[str, str, int]] = []
     for queue_name, nodes in agg_queue_nodes.items():
         style = AGGREGATED_QUEUE_STYLES.get(queue_name, _AGGREGATED_QUEUE_DEFAULT_STYLE)
         cells_needed = max(1, int(nodes / nodes_per_cell))
@@ -191,66 +201,101 @@ def _build_grid(
                 current += 1
         agg_legend.append((style, queue_name, nodes))
 
-    # Count available
-    available_nodes = total_nodes - sum(nc for _, nc in large_queue_jobs) - sum(agg_queue_nodes.values())
-    if available_nodes < 0:
-        available_nodes = 0
+    # Stats
+    running_nodes = sum(nc for _, nc in large_queue_jobs) + sum(agg_queue_nodes.values())
+    available_nodes = max(0, total_nodes - running_nodes)
+    queued_jobs = sum(1 for j in snapshot.jobs if j.state == "Q")
+    utilisation = running_nodes / total_nodes * 100
+
+    # ── header ──────────────────────────────────────────────────────
+    ts = ref.astimezone().strftime("%H:%M:%S") if ref.tzinfo else ref.strftime("%H:%M:%S")
+
+    header = Text()
+    header.append("Cluster Status ", style="bold")
+    header.append(f"[{ts}]", style="dim")
+    header.append("  ")
+    header.append(f"{utilisation:.0f}% ", style="bold green" if utilisation < 80 else "bold yellow" if utilisation < 95 else "bold red")
+    header.append("utilised", style="dim")
+    header.append("  ")
+    header.append(f"Nodes: ", style="dim")
+    header.append(f"{total_nodes:,}", style="bold")
+    header.append(f"  Running: ", style="dim")
+    header.append(f"{running_nodes:,}", style="bold cyan")
+    header.append(f"  Available: ", style="dim")
+    header.append(f"{available_nodes:,}", style="bold green")
+    header.append(f"  Jobs: ", style="dim")
+    header.append(f"{len(running_jobs)}", style="bold")
+    header.append("R", style="dim green")
+    header.append("/", style="dim")
+    header.append(f"{queued_jobs}", style="bold")
+    header.append("Q", style="dim yellow")
+
+    # ── utilisation bar ─────────────────────────────────────────────
+    bar_width = min(grid_width, 50)
+    filled = int(utilisation / 100 * bar_width)
+    bar = Text()
+    bar.append("  [", style="dim")
+    if filled > 0:
+        bar.append("━" * filled, style="bold cyan")
+    if bar_width - filled > 0:
+        bar.append("━" * (bar_width - filled), style="grey30")
+    bar.append("]", style="dim")
 
     # ── render grid ─────────────────────────────────────────────────
     grid = Text()
-    border_line = "=" * (grid_width + 2)
-    grid.append(border_line + "\n", style=_BORDER_STYLE)
+    # Top border
+    grid.append(_TL, style=_BORDER)
+    grid.append(_H * grid_width, style=_BORDER)
+    grid.append(_TR + "\n", style=_BORDER)
 
     for row in range(grid_height):
-        grid.append("|", style=_BORDER_STYLE)
+        grid.append(_V, style=_BORDER)
         for col in range(grid_width):
             idx = row * grid_width + col
             grid.append(_BLOCK_CHAR, style=cell_styles[idx])
-        grid.append("|", style=_BORDER_STYLE)
+        grid.append(_V, style=_BORDER)
         grid.append("\n")
 
-    grid.append(border_line, style=_BORDER_STYLE)
+    # Bottom border
+    grid.append(_BL, style=_BORDER)
+    grid.append(_H * grid_width, style=_BORDER)
+    grid.append(_BR, style=_BORDER)
 
     # ── render legend ───────────────────────────────────────────────
     legend = Text()
-    legend.append("Legend:\n", style="bold")
+    legend.append("Legend\n", style="bold underline")
 
     for style, user, queue, nodes, time_str in legend_entries:
         legend.append("  ")
-        legend.append("  ", style=style)
-        legend.append(f" {user:<8} {nodes:>5}n {queue:<12}")
+        legend.append(" ▊", style=style)
+        legend.append(f" {user:<10}", style="bold")
+        legend.append(f" {nodes:>5,}n", style="cyan")
+        legend.append(f"  {queue:<14}", style="dim")
         if time_str:
-            legend.append(f" [{time_str}]")
+            legend.append(f" [{time_str}]", style="yellow")
         legend.append("\n")
 
+    if agg_legend:
+        legend.append("\n")
     for style, queue_name, nodes in agg_legend:
         legend.append("  ")
-        legend.append("  ", style=style)
-        legend.append(f" {queue_name} ({nodes} nodes)\n")
+        legend.append(" ▊", style=style)
+        legend.append(f" {queue_name}", style="bold")
+        legend.append(f" ({nodes:,} nodes)", style="dim")
+        legend.append("\n")
 
-    legend.append("  ")
-    legend.append("  ", style=_EMPTY_STYLE)
-    legend.append(f" Available ({available_nodes} nodes)\n")
+    legend.append("\n  ")
+    legend.append(" ▊", style=_EMPTY_STYLE)
+    legend.append(" Available", style="bold")
+    legend.append(f" ({available_nodes:,} nodes)", style="dim")
 
-    # ── summary header ──────────────────────────────────────────────
-    running_nodes = sum(nc for _, nc in large_queue_jobs) + sum(agg_queue_nodes.values())
-    queued_jobs = sum(1 for j in snapshot.jobs if j.state == "Q")
-    header = Text()
-    header.append("Cluster Status", style="bold")
-    ts = ref.astimezone().strftime("%H:%M:%S") if ref.tzinfo else ref.strftime("%H:%M:%S")
-    header.append(f" [{ts}]")
-    header.append(f" | Nodes: {total_nodes:,}")
-    header.append(f" | Running: {running_nodes:,}")
-    header.append(f" | Available: {available_nodes:,}")
-    header.append(f" | Jobs: {len(running_jobs)}R/{queued_jobs}Q")
+    # ── compose layout ──────────────────────────────────────────────
+    layout = Table.grid(padding=(0, 3), expand=True)
+    layout.add_column(ratio=3)
+    layout.add_column(ratio=1)
+    layout.add_row(grid, legend)
 
-    # Combine header + grid
-    full_grid = Text()
-    full_grid.append_text(header)
-    full_grid.append("\n\n")
-    full_grid.append_text(grid)
-
-    return full_grid, legend
+    return Group(header, bar, Text(), layout)
 
 
 # ── widget ──────────────────────────────────────────────────────────────
@@ -265,14 +310,9 @@ class ClusterGridWidget(Static):
     DEFAULT_CSS = """
     ClusterGridWidget {
         height: 1fr;
-        padding: 1;
+        padding: 1 2;
     }
     """
 
     def update_from_snapshot(self, snapshot: SchedulerSnapshot) -> None:
-        grid_text, legend_text = _build_grid(snapshot)
-        layout = Table.grid(padding=(0, 2))
-        layout.add_column(ratio=3)
-        layout.add_column(ratio=1)
-        layout.add_row(grid_text, legend_text)
-        self.update(layout)
+        self.update(_build_grid(snapshot))
