@@ -261,10 +261,14 @@ def _build_grid(
     grid.append(_BR, style=_BORDER)
 
     # ── render legend (horizontal, below grid) ────────────────────────
+    def _fg(bg_style: str) -> str:
+        """Convert 'on <color>' background style to foreground."""
+        return bg_style.replace("on ", "", 1) if bg_style.startswith("on ") else bg_style
+
     # Job legend row
     jobs_row = Text()
     for style, user, queue, nodes, time_str in legend_entries:
-        jobs_row.append("██", style=style)
+        jobs_row.append("██", style=_fg(style))
         jobs_row.append(f" {user}", style="bold")
         jobs_row.append(f" {nodes:,}n", style="cyan")
         jobs_row.append(f" {queue}", style="dim")
@@ -275,12 +279,12 @@ def _build_grid(
     # Aggregated queues row
     agg_row = Text()
     for style, queue_name, nodes in agg_legend:
-        agg_row.append("██", style=style)
+        agg_row.append("██", style=_fg(style))
         agg_row.append(f" {queue_name}", style="bold")
         agg_row.append(f" ({nodes:,}n)", style="dim")
         agg_row.append("   ")
 
-    agg_row.append("██", style=_EMPTY_STYLE)
+    agg_row.append("██", style=_fg(_EMPTY_STYLE))
     agg_row.append(" Available", style="bold")
     agg_row.append(f" ({available_nodes:,}n)", style="dim")
 
