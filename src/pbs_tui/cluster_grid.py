@@ -394,7 +394,7 @@ def _build_grid(
 # ── widgets ─────────────────────────────────────────────────────────────
 
 
-class _GridPanel(Widget, can_focus=True):
+class _GridPanel(Widget):
     """Interactive coloured grid — supports click to inspect a job."""
 
     DEFAULT_CSS = """
