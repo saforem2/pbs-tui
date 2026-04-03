@@ -296,7 +296,7 @@ def format_job_table_cells(job: Job, reference_time: datetime) -> dict[str, Opti
         "#JobId": _truncate_job_id(job.id),
         "User": job.user,
         "Account": job.account,
-        "JobName": job.name,
+        "JobName": (job.name[:20] + "…") if job.name and len(job.name) > 20 else job.name,
         "WallTime": job.walltime,
         "QueuedTime": _format_duration(queued_duration),
         "EstStart": _format_datetime(est_start),
