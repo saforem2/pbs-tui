@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from rich.console import Group
-from rich.table import Table
 from rich.text import Text
 from textual.widgets import Static
 
@@ -261,51 +260,31 @@ def _build_grid(
     grid.append(_H * grid_width, style=_BORDER)
     grid.append(_BR, style=_BORDER)
 
-    # ── render legend ───────────────────────────────────────────────
-    legend_table = Table.grid(padding=(0, 1))
-    legend_table.add_column(justify="left")   # swatch
-    legend_table.add_column(justify="left")   # user / queue name
-    legend_table.add_column(justify="right")  # nodes
-    legend_table.add_column(justify="left")   # queue / extra
-    legend_table.add_column(justify="right")  # time
-
-    legend_table.add_row(
-        Text("Legend", style="bold underline"), Text(), Text(), Text(), Text()
-    )
-
+    # ── render legend (horizontal, below grid) ────────────────────────
+    # Job legend row
+    jobs_row = Text()
     for style, user, queue, nodes, time_str in legend_entries:
-        swatch = Text(" ▊ ", style=style)
-        user_t = Text(user, style="bold")
-        nodes_t = Text(f"{nodes:>5,}n", style="cyan")
-        queue_t = Text(queue, style="dim")
-        time_t = Text(f"[{time_str}]", style="yellow") if time_str else Text()
-        legend_table.add_row(swatch, user_t, nodes_t, queue_t, time_t)
+        jobs_row.append("██", style=style)
+        jobs_row.append(f" {user}", style="bold")
+        jobs_row.append(f" {nodes:,}n", style="cyan")
+        jobs_row.append(f" {queue}", style="dim")
+        if time_str:
+            jobs_row.append(f" [{time_str}]", style="yellow")
+        jobs_row.append("   ")
 
-    if agg_legend:
-        legend_table.add_row(Text(), Text(), Text(), Text(), Text())
-
+    # Aggregated queues row
+    agg_row = Text()
     for style, queue_name, nodes in agg_legend:
-        swatch = Text(" ▊ ", style=style)
-        name_t = Text(queue_name, style="bold")
-        info_t = Text(f"({nodes:,} nodes)", style="dim")
-        legend_table.add_row(swatch, name_t, Text(), info_t, Text())
+        agg_row.append("██", style=style)
+        agg_row.append(f" {queue_name}", style="bold")
+        agg_row.append(f" ({nodes:,}n)", style="dim")
+        agg_row.append("   ")
 
-    legend_table.add_row(Text(), Text(), Text(), Text(), Text())
-    legend_table.add_row(
-        Text(" ▊ ", style=_EMPTY_STYLE),
-        Text("Available", style="bold"),
-        Text(),
-        Text(f"({available_nodes:,} nodes)", style="dim"),
-        Text(),
-    )
+    agg_row.append("██", style=_EMPTY_STYLE)
+    agg_row.append(" Available", style="bold")
+    agg_row.append(f" ({available_nodes:,}n)", style="dim")
 
-    # ── compose layout ──────────────────────────────────────────────
-    layout = Table.grid(padding=(0, 3), expand=True)
-    layout.add_column(ratio=3)
-    layout.add_column(ratio=1)
-    layout.add_row(grid, legend_table)
-
-    return Group(header, bar, Text(), layout)
+    return Group(header, bar, Text(), grid, Text(), jobs_row, agg_row)
 
 
 # ── widget ──────────────────────────────────────────────────────────────
