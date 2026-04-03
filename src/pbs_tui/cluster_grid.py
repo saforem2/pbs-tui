@@ -53,6 +53,19 @@ _AGGREGATED_QUEUE_DEFAULT_STYLE = "on color(59)"
 _EMPTY_STYLE = "on grey15"
 _SEP_STYLE = "on grey7"  # dark separator between job blocks
 
+# Alternate (darker) styles for striped texture on queues and available cells
+AGGREGATED_QUEUE_ALT_STYLES: Dict[str, str] = {
+    "debug": "on color(172)",
+    "debug-scaling": "on color(178)",
+    "preemptable": "on color(59)",
+    "demand": "on color(96)",
+    "tiny": "on color(66)",
+    "small": "on color(67)",
+    "medium": "on color(107)",
+}
+_AGGREGATED_QUEUE_DEFAULT_ALT_STYLE = "on color(23)"
+_EMPTY_ALT_STYLE = "on grey11"
+
 # Queues whose running jobs are always merged into a single coloured block
 AGGREGATED_QUEUES = frozenset(
     {"debug", "debug-scaling", "preemptable", "demand", "tiny", "small", "medium"}
@@ -209,7 +222,9 @@ def _build_grid(
     large_queue_jobs.sort(key=lambda x: x[1], reverse=True)
 
     # ── assign cells ────────────────────────────────────────────────
+    # cell_styles: primary color; cell_alt: alternate color for striped rows
     cell_styles: List[str] = [_EMPTY_STYLE] * total_cells
+    cell_alt: List[str] = [_EMPTY_ALT_STYLE] * total_cells
     cell_owners: List[Optional[str]] = [None] * total_cells
     current = 0
 
@@ -222,6 +237,7 @@ def _build_grid(
         nonlocal current
         if current > 0 and current < total_cells:
             cell_styles[current] = _SEP_STYLE
+            cell_alt[current] = _SEP_STYLE
             cell_owners[current] = None
             current += 1
 
@@ -233,6 +249,7 @@ def _build_grid(
         for _ in range(cells_needed):
             if current < total_cells:
                 cell_styles[current] = style
+                cell_alt[current] = style  # solid — no stripe for jobs
                 cell_owners[current] = job.id
                 current += 1
         prev_owner = job.id
@@ -240,16 +257,18 @@ def _build_grid(
         time_str = _format_remaining(remaining)
         legend_entries.append((style, job.user, job.queue, nc, time_str))
 
-    # Aggregated queues
+    # Aggregated queues — striped
     agg_legend: List[Tuple[str, str, int]] = []
     for queue_name, nodes in agg_queue_nodes.items():
         style = AGGREGATED_QUEUE_STYLES.get(queue_name, _AGGREGATED_QUEUE_DEFAULT_STYLE)
+        alt = AGGREGATED_QUEUE_ALT_STYLES.get(queue_name, _AGGREGATED_QUEUE_DEFAULT_ALT_STYLE)
         cells_needed = max(1, int(nodes / nodes_per_cell))
         if prev_owner is not None:
             _insert_sep()
         for _ in range(cells_needed):
             if current < total_cells:
                 cell_styles[current] = style
+                cell_alt[current] = alt
                 cell_owners[current] = f"queue:{queue_name}"
                 current += 1
         prev_owner = f"queue:{queue_name}"
@@ -291,7 +310,8 @@ def _build_grid(
     header.append(f"{queued_jobs}", style="bold")
     header.append("Q", style="dim yellow")
 
-    # ── render grid (half-block) ────────────────────────────────────
+    # ── render grid (half-block with stripes) ─────────────────────────
+    # Odd logical rows use alt style → creates horizontal stripe texture
     grid = Text()
     text_rows = grid_height // 2
     for text_row in range(text_rows):
@@ -300,9 +320,9 @@ def _build_grid(
         for col in range(grid_width):
             top_idx = top_row * grid_width + col
             bot_idx = bot_row * grid_width + col
-            top_fg = _fg(cell_styles[top_idx])
-            bot_bg = cell_styles[bot_idx]
-            grid.append("▀", style=f"{top_fg} {bot_bg}")
+            top_s = cell_styles[top_idx] if top_row % 2 == 0 else cell_alt[top_idx]
+            bot_s = cell_styles[bot_idx] if bot_row % 2 == 0 else cell_alt[bot_idx]
+            grid.append("▀", style=f"{_fg(top_s)} {bot_s}")
         if text_row < text_rows - 1:
             grid.append("\n")
 
@@ -400,7 +420,7 @@ class _GridPanel(Widget):
     DEFAULT_CSS = """
     _GridPanel {
         border: round $surface-lighten-2;
-        height: auto;
+        height: 1fr;
         padding: 0 1;
     }
     """
@@ -453,6 +473,7 @@ class ClusterGridWidget(VerticalScroll):
     """Cluster-wide node utilization grid with legend.
 
     Scrollable container. Call :meth:`update_from_snapshot` on each refresh.
+    The grid auto-sizes to fill available width; height scales to match.
     """
 
     class CellClicked(Message):
@@ -470,19 +491,43 @@ class ClusterGridWidget(VerticalScroll):
     ClusterGridWidget _HeaderPanel {
         height: auto;
     }
+    ClusterGridWidget _GridPanel {
+        height: 1fr;
+    }
     ClusterGridWidget _LegendBar {
         height: auto;
         margin-top: 1;
     }
     """
 
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._snapshot: Optional[SchedulerSnapshot] = None
+
     def compose(self):
         yield _HeaderPanel(id="cluster_header")
         yield _GridPanel(id="cluster_grid_panel")
         yield _LegendBar(id="cluster_legend_bar")
 
-    def update_from_snapshot(self, snapshot: SchedulerSnapshot) -> None:
-        data = _build_grid(snapshot)
+    def _rebuild(self) -> None:
+        if self._snapshot is None:
+            return
+        panel = self.query_one(_GridPanel)
+        # Use the panel's content area for grid dimensions
+        # Subtract border (2) and padding (2) from width
+        w = panel.size.width - 4 if panel.size.width > 10 else 100
+        # Each text row = 2 logical rows; subtract border (2) from height
+        h = (panel.size.height - 2) * 2 if panel.size.height > 4 else 28
+        h = h if h % 2 == 0 else h + 1
+
+        data = _build_grid(self._snapshot, grid_width=w, grid_height=h)
         self.query_one(_HeaderPanel).update(data.header)
-        self.query_one(_GridPanel).set_grid(data)
+        panel.set_grid(data)
         self.query_one(_LegendBar).update(data.legend)
+
+    def update_from_snapshot(self, snapshot: SchedulerSnapshot) -> None:
+        self._snapshot = snapshot
+        self._rebuild()
+
+    def on_resize(self, event) -> None:
+        self._rebuild()
