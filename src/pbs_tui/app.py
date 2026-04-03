@@ -856,6 +856,32 @@ class PBSTUI(App[None]):
                 else:
                     self.query_one(DetailPanel).hide()
 
+    def on_cluster_grid_widget_cell_clicked(
+        self, event: ClusterGridWidget.CellClicked
+    ) -> None:
+        if self._snapshot is None or not self._detail_panel_enabled:
+            return
+        owner = event.owner
+        if owner.startswith("queue:"):
+            queue_name = owner[6:]
+            queue = self._queue_index.get(queue_name)
+            if queue:
+                self._selected_queue_name = queue.name
+                self._selected_job_id = None
+                self._selected_node_name = None
+                self._detail_source = "queue"
+                self.query_one(DetailPanel).show_queue(queue)
+        else:
+            job = self._job_index.get(owner)
+            if job:
+                self._selected_job_id = job.id
+                self._selected_node_name = None
+                self._selected_queue_name = None
+                self._detail_source = "job"
+                self.query_one(DetailPanel).show_job(
+                    job, reference_time=self._snapshot.timestamp
+                )
+
     def _update_detail_panel(self, *, reference_time: Optional[datetime] = None) -> None:
         """Refresh the detail panel based on current selection and visibility."""
 

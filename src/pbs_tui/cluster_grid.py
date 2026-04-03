@@ -6,9 +6,12 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
-from rich.console import Group
+from rich.console import Group, RenderableType
 from rich.table import Table
 from rich.text import Text
+from textual.containers import VerticalScroll
+from textual.message import Message
+from textual.widget import Widget
 from textual.widgets import Static
 
 from .data import Job, SchedulerSnapshot
@@ -37,7 +40,6 @@ JOB_STYLES = [
 ]
 
 # Aggregated-queue colours — deliberately muted/pastel to not clash with jobs.
-# Each uses a 256-colour index chosen to be visually distinct from the job palette.
 AGGREGATED_QUEUE_STYLES: Dict[str, str] = {
     "debug": "on color(215)",        # sandy orange
     "debug-scaling": "on color(222)", # pale gold
@@ -48,12 +50,10 @@ AGGREGATED_QUEUE_STYLES: Dict[str, str] = {
     "medium": "on color(150)",        # sage green
 }
 
-_AGGREGATED_QUEUE_DEFAULT_STYLE = "on color(59)"  # dark olive grey
+_AGGREGATED_QUEUE_DEFAULT_STYLE = "on color(59)"
 _EMPTY_STYLE = "on grey15"
-_BLOCK_CHAR = " "         # solid fill (space with background) for jobs
-_QUEUE_GRID_CHAR = "░"    # textured fill for aggregated queues in the grid
 
-# Legend swatches: jobs get solid ██, queues get striped ░░ to visually separate
+# Legend swatches
 _JOB_SWATCH = "██"
 _QUEUE_SWATCH = "░░"
 _EMPTY_SWATCH = "▒▒"
@@ -65,6 +65,11 @@ AGGREGATED_QUEUES = frozenset(
 
 
 # ── helpers ─────────────────────────────────────────────────────────────
+
+
+def _fg(bg_style: str) -> str:
+    """Convert ``'on <color>'`` background style to a foreground style."""
+    return bg_style.replace("on ", "", 1) if bg_style.startswith("on ") else bg_style
 
 
 def _job_node_count(job: Job) -> int:
@@ -143,15 +148,49 @@ def _format_remaining(td: Optional[timedelta]) -> str:
     return f"{minutes}m"
 
 
+# ── grid data structure ─────────────────────────────────────────────────
+
+
+class GridData:
+    """Holds the result of building the cluster grid."""
+
+    __slots__ = (
+        "header", "grid_text", "legend", "cell_owners",
+        "grid_width", "grid_height",
+    )
+
+    def __init__(
+        self,
+        header: RenderableType,
+        grid_text: Text,
+        legend: RenderableType,
+        cell_owners: List[Optional[str]],
+        grid_width: int,
+        grid_height: int,
+    ) -> None:
+        self.header = header
+        self.grid_text = grid_text
+        self.legend = legend
+        self.cell_owners = cell_owners
+        self.grid_width = grid_width
+        self.grid_height = grid_height
+
+
 # ── grid building ───────────────────────────────────────────────────────
 
 
 def _build_grid(
     snapshot: SchedulerSnapshot,
     grid_width: int = 100,
-    grid_height: int = 14,
-) -> Group:
-    """Return a Rich renderable with header, grid, and legend."""
+    grid_height: int = 28,
+) -> GridData:
+    """Build the cluster grid data.
+
+    *grid_height* must be even (each text row encodes two logical rows via
+    half-block characters).
+    """
+
+    grid_height = grid_height if grid_height % 2 == 0 else grid_height + 1
 
     total_nodes = max(len(snapshot.nodes), 1)
     total_cells = grid_width * grid_height
@@ -162,7 +201,7 @@ def _build_grid(
     running_jobs = [j for j in snapshot.jobs if j.state == "R"]
 
     # ── partition jobs ──────────────────────────────────────────────
-    large_queue_jobs: List[Tuple[Job, int]] = []  # (job, node_count)
+    large_queue_jobs: List[Tuple[Job, int]] = []
     agg_queue_nodes: Dict[str, int] = defaultdict(int)
 
     for job in running_jobs:
@@ -172,12 +211,11 @@ def _build_grid(
         else:
             large_queue_jobs.append((job, nc))
 
-    # Sort largest first
     large_queue_jobs.sort(key=lambda x: x[1], reverse=True)
 
     # ── assign cells ────────────────────────────────────────────────
-    # Each cell is (bg_style, char) — jobs use solid blocks, queues use patterns
-    cell_data: List[Tuple[str, str]] = [(_EMPTY_STYLE, _BLOCK_CHAR)] * total_cells
+    cell_styles: List[str] = [_EMPTY_STYLE] * total_cells
+    cell_owners: List[Optional[str]] = [None] * total_cells
     current = 0
 
     legend_entries: List[Tuple[str, str, str, int, str]] = []
@@ -187,20 +225,22 @@ def _build_grid(
         cells_needed = max(1, int(nc / nodes_per_cell))
         for _ in range(cells_needed):
             if current < total_cells:
-                cell_data[current] = (style, _BLOCK_CHAR)
+                cell_styles[current] = style
+                cell_owners[current] = job.id
                 current += 1
         remaining = _time_remaining(job, ref)
         time_str = _format_remaining(remaining)
         legend_entries.append((style, job.user, job.queue, nc, time_str))
 
-    # Aggregated queues — use pattern character in the grid
+    # Aggregated queues
     agg_legend: List[Tuple[str, str, int]] = []
     for queue_name, nodes in agg_queue_nodes.items():
         style = AGGREGATED_QUEUE_STYLES.get(queue_name, _AGGREGATED_QUEUE_DEFAULT_STYLE)
         cells_needed = max(1, int(nodes / nodes_per_cell))
         for _ in range(cells_needed):
             if current < total_cells:
-                cell_data[current] = (style, _QUEUE_GRID_CHAR)
+                cell_styles[current] = style
+                cell_owners[current] = f"queue:{queue_name}"
                 current += 1
         agg_legend.append((style, queue_name, nodes))
 
@@ -217,23 +257,26 @@ def _build_grid(
     header.append("Cluster Status ", style="bold")
     header.append(f"[{ts}]", style="dim")
     header.append("  ")
-    header.append(f"{utilisation:.0f}% ", style="bold green" if utilisation < 80 else "bold yellow" if utilisation < 95 else "bold red")
+    header.append(
+        f"{utilisation:.0f}% ",
+        style="bold green" if utilisation < 80 else "bold yellow" if utilisation < 95 else "bold red",
+    )
     header.append("utilised", style="dim")
     header.append("  ")
-    header.append(f"Nodes: ", style="dim")
+    header.append("Nodes: ", style="dim")
     header.append(f"{total_nodes:,}", style="bold")
-    header.append(f"  Running: ", style="dim")
+    header.append("  Running: ", style="dim")
     header.append(f"{running_nodes:,}", style="bold cyan")
-    header.append(f"  Available: ", style="dim")
+    header.append("  Available: ", style="dim")
     header.append(f"{available_nodes:,}", style="bold green")
-    header.append(f"  Jobs: ", style="dim")
+    header.append("  Jobs: ", style="dim")
     header.append(f"{len(running_jobs)}", style="bold")
     header.append("R", style="dim green")
     header.append("/", style="dim")
     header.append(f"{queued_jobs}", style="bold")
     header.append("Q", style="dim yellow")
 
-    # ── utilisation bar ─────────────────────────────────────────────
+    # utilisation bar
     bar_width = min(grid_width, 50)
     filled = int(utilisation / 100 * bar_width)
     bar = Text()
@@ -244,23 +287,23 @@ def _build_grid(
         bar.append("━" * (bar_width - filled), style="grey30")
     bar.append("]", style="dim")
 
-    # ── render grid ─────────────────────────────────────────────────
+    # ── render grid (half-block) ────────────────────────────────────
     grid = Text()
-    for row in range(grid_height):
+    text_rows = grid_height // 2
+    for text_row in range(text_rows):
+        top_row = text_row * 2
+        bot_row = text_row * 2 + 1
         for col in range(grid_width):
-            idx = row * grid_width + col
-            style, char = cell_data[idx]
-            grid.append(char, style=style)
-        if row < grid_height - 1:
+            top_idx = top_row * grid_width + col
+            bot_idx = bot_row * grid_width + col
+            top_fg = _fg(cell_styles[top_idx])
+            bot_bg = cell_styles[bot_idx]
+            grid.append("▀", style=f"{top_fg} {bot_bg}")
+        if text_row < text_rows - 1:
             grid.append("\n")
 
-    # ── render legend (grid below the chart) ──────────────────────────
-    def _fg(bg_style: str) -> str:
-        """Convert 'on <color>' background style to foreground."""
-        return bg_style.replace("on ", "", 1) if bg_style.startswith("on ") else bg_style
-
+    # ── legend ──────────────────────────────────────────────────────
     def _entry(swatch: str, bg_style: str, label: str, detail: str = "") -> Text:
-        """Build a single legend entry: swatch label detail."""
         t = Text()
         t.append(swatch, style=_fg(bg_style))
         t.append(f" {label}", style="bold")
@@ -268,9 +311,7 @@ def _build_grid(
             t.append(f" {detail}", style="dim")
         return t
 
-    # Build all legend entries as Text objects
     all_entries: List[Text] = []
-
     for style, user, queue, nodes, time_str in legend_entries:
         detail_parts = [f"{nodes:,}n {queue}"]
         if time_str:
@@ -282,7 +323,6 @@ def _build_grid(
 
     all_entries.append(_entry(_EMPTY_SWATCH, _EMPTY_STYLE, "Available", f"({available_nodes:,}n)"))
 
-    # Lay entries into a grid with up to 4 columns
     n_cols = min(4, len(all_entries)) if all_entries else 1
     legend_grid = Table.grid(padding=(0, 3), expand=True)
     for _ in range(n_cols):
@@ -294,39 +334,90 @@ def _build_grid(
             row.append(Text())
         legend_grid.add_row(*row)
 
-    return Group(header, bar), grid, legend_grid
+    return GridData(
+        header=Group(header, bar),
+        grid_text=grid,
+        legend=legend_grid,
+        cell_owners=cell_owners,
+        grid_width=grid_width,
+        grid_height=grid_height,
+    )
 
 
-# ── widget ──────────────────────────────────────────────────────────────
+# ── widgets ─────────────────────────────────────────────────────────────
 
 
-class _GridPanel(Static):
-    """The coloured grid area — gets a Textual border."""
+class _GridPanel(Widget, can_focus=True):
+    """Interactive coloured grid — supports click to inspect a job."""
+
+    DEFAULT_CSS = """
+    _GridPanel {
+        border: round $surface-lighten-2;
+        height: auto;
+        padding: 0 1;
+    }
+    """
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._content: RenderableType = Text()
+        self._cell_owners: List[Optional[str]] = []
+        self._grid_width: int = 0
+        self._grid_height: int = 0
+
+    def render(self) -> RenderableType:
+        return self._content
+
+    def set_grid(self, data: GridData) -> None:
+        self._content = data.grid_text
+        self._cell_owners = data.cell_owners
+        self._grid_width = data.grid_width
+        self._grid_height = data.grid_height
+        self.refresh()
+
+    def on_click(self, event) -> None:
+        if not self._cell_owners or self._grid_width == 0:
+            return
+        col = int(event.x)
+        # Each text row = 2 logical rows (half-block rendering)
+        text_row = int(event.y)
+        logical_row = text_row * 2  # top half of clicked row
+        if col < 0 or col >= self._grid_width:
+            return
+        if logical_row < 0 or logical_row >= self._grid_height:
+            return
+        idx = logical_row * self._grid_width + col
+        if idx < 0 or idx >= len(self._cell_owners):
+            return
+        owner = self._cell_owners[idx]
+        if owner:
+            self.post_message(ClusterGridWidget.CellClicked(owner))
 
 
 class _InfoPanel(Static):
     """Header + legend area outside the border."""
 
 
-class ClusterGridWidget(Static):
+class ClusterGridWidget(VerticalScroll):
     """Cluster-wide node utilization grid with legend.
 
-    Call :meth:`update_from_snapshot` whenever the scheduler snapshot refreshes.
+    Scrollable container. Call :meth:`update_from_snapshot` on each refresh.
     """
+
+    class CellClicked(Message):
+        """Posted when a grid cell is clicked."""
+
+        def __init__(self, owner: str) -> None:
+            super().__init__()
+            self.owner = owner
 
     DEFAULT_CSS = """
     ClusterGridWidget {
-        layout: vertical;
         height: 1fr;
         padding: 1 2;
     }
     ClusterGridWidget _InfoPanel {
         height: auto;
-    }
-    ClusterGridWidget _GridPanel {
-        border: round $surface-lighten-2;
-        height: 1fr;
-        padding: 0 1;
     }
     """
 
@@ -335,6 +426,6 @@ class ClusterGridWidget(Static):
         yield _GridPanel(id="cluster_grid_panel")
 
     def update_from_snapshot(self, snapshot: SchedulerSnapshot) -> None:
-        header, grid, legend = _build_grid(snapshot)
-        self.query_one(_InfoPanel).update(Group(header, Text(), legend))
-        self.query_one(_GridPanel).update(grid)
+        data = _build_grid(snapshot)
+        self.query_one(_InfoPanel).update(Group(data.header, Text(), data.legend))
+        self.query_one(_GridPanel).set_grid(data)
