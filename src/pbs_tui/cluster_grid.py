@@ -16,7 +16,7 @@ from .nodes import parse_node_count_spec, extract_exec_host_nodes, extract_reque
 
 # ── colour palette ──────────────────────────────────────────────────────
 
-# Individual job colours — high contrast, ordered for visual distinction
+# Individual job colours — saturated, high-contrast, no overlap with queue palette
 JOB_STYLES = [
     "on dodger_blue2",
     "on red3",
@@ -30,22 +30,32 @@ JOB_STYLES = [
     "on indian_red",
     "on orchid",
     "on spring_green2",
+    "on steel_blue",
+    "on salmon1",
+    "on pale_green1",
+    "on hot_pink",
 ]
 
-# Aggregated-queue colours
+# Aggregated-queue colours — deliberately muted/pastel to not clash with jobs.
+# Each uses a 256-colour index chosen to be visually distinct from the job palette.
 AGGREGATED_QUEUE_STYLES: Dict[str, str] = {
-    "debug": "on yellow",
-    "debug-scaling": "on bright_yellow",
-    "preemptable": "on grey50",
-    "demand": "on bright_magenta",
-    "tiny": "on bright_cyan",
-    "small": "on cyan",
-    "medium": "on bright_green",
+    "debug": "on color(215)",        # sandy orange
+    "debug-scaling": "on color(222)", # pale gold
+    "preemptable": "on color(102)",   # muted olive
+    "demand": "on color(132)",        # dusty rose
+    "tiny": "on color(109)",          # muted teal
+    "small": "on color(110)",         # soft steel blue
+    "medium": "on color(150)",        # sage green
 }
 
-_AGGREGATED_QUEUE_DEFAULT_STYLE = "on grey30"
+_AGGREGATED_QUEUE_DEFAULT_STYLE = "on color(59)"  # dark olive grey
 _EMPTY_STYLE = "on grey15"
 _BLOCK_CHAR = " "
+
+# Legend swatches: jobs get solid ██, queues get striped ░░ to visually separate
+_JOB_SWATCH = "██"
+_QUEUE_SWATCH = "░░"
+_EMPTY_SWATCH = "▒▒"
 
 # Queues whose running jobs are always merged into a single coloured block
 AGGREGATED_QUEUES = frozenset(
@@ -266,10 +276,10 @@ def _build_grid(
         """Convert 'on <color>' background style to foreground."""
         return bg_style.replace("on ", "", 1) if bg_style.startswith("on ") else bg_style
 
-    def _entry(bg_style: str, label: str, detail: str = "") -> Text:
-        """Build a single legend entry: ██ label detail."""
+    def _entry(swatch: str, bg_style: str, label: str, detail: str = "") -> Text:
+        """Build a single legend entry: swatch label detail."""
         t = Text()
-        t.append("██", style=_fg(bg_style))
+        t.append(swatch, style=_fg(bg_style))
         t.append(f" {label}", style="bold")
         if detail:
             t.append(f" {detail}", style="dim")
@@ -282,12 +292,12 @@ def _build_grid(
         detail_parts = [f"{nodes:,}n {queue}"]
         if time_str:
             detail_parts.append(f"[{time_str}]")
-        all_entries.append(_entry(style, user, " ".join(detail_parts)))
+        all_entries.append(_entry(_JOB_SWATCH, style, user, " ".join(detail_parts)))
 
     for style, queue_name, nodes in agg_legend:
-        all_entries.append(_entry(style, queue_name, f"({nodes:,}n)"))
+        all_entries.append(_entry(_QUEUE_SWATCH, style, queue_name, f"({nodes:,}n)"))
 
-    all_entries.append(_entry(_EMPTY_STYLE, "Available", f"({available_nodes:,}n)"))
+    all_entries.append(_entry(_EMPTY_SWATCH, _EMPTY_STYLE, "Available", f"({available_nodes:,}n)"))
 
     # Lay entries into a grid with up to 4 columns
     n_cols = min(4, len(all_entries)) if all_entries else 1
