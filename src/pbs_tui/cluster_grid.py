@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from rich.console import Group
+from rich.table import Table
 from rich.text import Text
 from textual.widgets import Static
 
@@ -260,35 +261,47 @@ def _build_grid(
     grid.append(_H * grid_width, style=_BORDER)
     grid.append(_BR, style=_BORDER)
 
-    # ── render legend (horizontal, below grid) ────────────────────────
+    # ── render legend (grid below the chart) ──────────────────────────
     def _fg(bg_style: str) -> str:
         """Convert 'on <color>' background style to foreground."""
         return bg_style.replace("on ", "", 1) if bg_style.startswith("on ") else bg_style
 
-    # Job legend row
-    jobs_row = Text()
+    def _entry(bg_style: str, label: str, detail: str = "") -> Text:
+        """Build a single legend entry: ██ label detail."""
+        t = Text()
+        t.append("██", style=_fg(bg_style))
+        t.append(f" {label}", style="bold")
+        if detail:
+            t.append(f" {detail}", style="dim")
+        return t
+
+    # Build all legend entries as Text objects
+    all_entries: List[Text] = []
+
     for style, user, queue, nodes, time_str in legend_entries:
-        jobs_row.append("██", style=_fg(style))
-        jobs_row.append(f" {user}", style="bold")
-        jobs_row.append(f" {nodes:,}n", style="cyan")
-        jobs_row.append(f" {queue}", style="dim")
+        detail_parts = [f"{nodes:,}n {queue}"]
         if time_str:
-            jobs_row.append(f" [{time_str}]", style="yellow")
-        jobs_row.append("   ")
+            detail_parts.append(f"[{time_str}]")
+        all_entries.append(_entry(style, user, " ".join(detail_parts)))
 
-    # Aggregated queues row
-    agg_row = Text()
     for style, queue_name, nodes in agg_legend:
-        agg_row.append("██", style=_fg(style))
-        agg_row.append(f" {queue_name}", style="bold")
-        agg_row.append(f" ({nodes:,}n)", style="dim")
-        agg_row.append("   ")
+        all_entries.append(_entry(style, queue_name, f"({nodes:,}n)"))
 
-    agg_row.append("██", style=_fg(_EMPTY_STYLE))
-    agg_row.append(" Available", style="bold")
-    agg_row.append(f" ({available_nodes:,}n)", style="dim")
+    all_entries.append(_entry(_EMPTY_STYLE, "Available", f"({available_nodes:,}n)"))
 
-    return Group(header, bar, Text(), grid, Text(), jobs_row, agg_row)
+    # Lay entries into a grid with up to 4 columns
+    n_cols = min(4, len(all_entries)) if all_entries else 1
+    legend_grid = Table.grid(padding=(0, 3), expand=True)
+    for _ in range(n_cols):
+        legend_grid.add_column()
+
+    for i in range(0, len(all_entries), n_cols):
+        row = all_entries[i : i + n_cols]
+        while len(row) < n_cols:
+            row.append(Text())
+        legend_grid.add_row(*row)
+
+    return Group(header, bar, Text(), grid, Text(), legend_grid)
 
 
 # ── widget ──────────────────────────────────────────────────────────────
