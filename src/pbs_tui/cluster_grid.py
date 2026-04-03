@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
 from rich.console import Group, RenderableType
-from rich.table import Table
 from rich.text import Text
 from textual.containers import VerticalScroll
 from textual.message import Message
@@ -52,11 +51,7 @@ AGGREGATED_QUEUE_STYLES: Dict[str, str] = {
 
 _AGGREGATED_QUEUE_DEFAULT_STYLE = "on color(59)"
 _EMPTY_STYLE = "on grey15"
-
-# Legend swatches
-_JOB_SWATCH = "██"
-_QUEUE_SWATCH = "░░"
-_EMPTY_SWATCH = "▒▒"
+_SEP_STYLE = "on grey7"  # dark separator between job blocks
 
 # Queues whose running jobs are always merged into a single coloured block
 AGGREGATED_QUEUES = frozenset(
@@ -220,14 +215,27 @@ def _build_grid(
 
     legend_entries: List[Tuple[str, str, str, int, str]] = []
 
+    prev_owner: Optional[str] = None
+
+    def _insert_sep() -> None:
+        """Insert a thin dark separator cell between blocks."""
+        nonlocal current
+        if current > 0 and current < total_cells:
+            cell_styles[current] = _SEP_STYLE
+            cell_owners[current] = None
+            current += 1
+
     for idx, (job, nc) in enumerate(large_queue_jobs):
         style = JOB_STYLES[idx % len(JOB_STYLES)]
         cells_needed = max(1, int(nc / nodes_per_cell))
+        if prev_owner is not None:
+            _insert_sep()
         for _ in range(cells_needed):
             if current < total_cells:
                 cell_styles[current] = style
                 cell_owners[current] = job.id
                 current += 1
+        prev_owner = job.id
         remaining = _time_remaining(job, ref)
         time_str = _format_remaining(remaining)
         legend_entries.append((style, job.user, job.queue, nc, time_str))
@@ -237,12 +245,19 @@ def _build_grid(
     for queue_name, nodes in agg_queue_nodes.items():
         style = AGGREGATED_QUEUE_STYLES.get(queue_name, _AGGREGATED_QUEUE_DEFAULT_STYLE)
         cells_needed = max(1, int(nodes / nodes_per_cell))
+        if prev_owner is not None:
+            _insert_sep()
         for _ in range(cells_needed):
             if current < total_cells:
                 cell_styles[current] = style
                 cell_owners[current] = f"queue:{queue_name}"
                 current += 1
+        prev_owner = f"queue:{queue_name}"
         agg_legend.append((style, queue_name, nodes))
+
+    # Separator before empty/available region
+    if prev_owner is not None and current < total_cells:
+        _insert_sep()
 
     # Stats
     running_nodes = sum(nc for _, nc in large_queue_jobs) + sum(agg_queue_nodes.values())
@@ -276,17 +291,6 @@ def _build_grid(
     header.append(f"{queued_jobs}", style="bold")
     header.append("Q", style="dim yellow")
 
-    # utilisation bar
-    bar_width = min(grid_width, 50)
-    filled = int(utilisation / 100 * bar_width)
-    bar = Text()
-    bar.append("  [", style="dim")
-    if filled > 0:
-        bar.append("━" * filled, style="bold cyan")
-    if bar_width - filled > 0:
-        bar.append("━" * (bar_width - filled), style="grey30")
-    bar.append("]", style="dim")
-
     # ── render grid (half-block) ────────────────────────────────────
     grid = Text()
     text_rows = grid_height // 2
@@ -302,42 +306,58 @@ def _build_grid(
         if text_row < text_rows - 1:
             grid.append("\n")
 
-    # ── legend ──────────────────────────────────────────────────────
-    def _entry(swatch: str, bg_style: str, label: str, detail: str = "") -> Text:
-        t = Text()
-        t.append(swatch, style=_fg(bg_style))
-        t.append(f" {label}", style="bold")
-        if detail:
-            t.append(f" {detail}", style="dim")
-        return t
+    # ── proportional legend bar ─────────────────────────────────────
+    # Each segment's width ∝ its node count.  Labels are rendered
+    # inside the segment when there's room, otherwise omitted.
+    bar_width = grid_width
 
-    all_entries: List[Text] = []
-    for style, user, queue, nodes, time_str in legend_entries:
-        detail_parts = [f"{nodes:,}n {queue}"]
-        if time_str:
-            detail_parts.append(f"[{time_str}]")
-        all_entries.append(_entry(_JOB_SWATCH, style, user, " ".join(detail_parts)))
-
+    # Collect segments: (style, label, node_count)
+    segments: List[Tuple[str, str, int]] = []
+    for style, user, _queue, nodes, _time_str in legend_entries:
+        label = f"{user} {nodes:,}n"
+        segments.append((style, label, nodes))
     for style, queue_name, nodes in agg_legend:
-        all_entries.append(_entry(_QUEUE_SWATCH, style, queue_name, f"({nodes:,}n)"))
+        segments.append((style, f"{queue_name} {nodes:,}n", nodes))
+    segments.append((_EMPTY_STYLE, f"Available {available_nodes:,}n", available_nodes))
 
-    all_entries.append(_entry(_EMPTY_SWATCH, _EMPTY_STYLE, "Available", f"({available_nodes:,}n)"))
+    # Calculate widths — ensure every non-zero segment gets at least 1 char
+    legend_bar = Text()
+    label_row = Text()
 
-    n_cols = min(4, len(all_entries)) if all_entries else 1
-    legend_grid = Table.grid(padding=(0, 3), expand=True)
-    for _ in range(n_cols):
-        legend_grid.add_column()
+    remaining_width = bar_width
+    remaining_nodes = total_nodes
+    seg_widths: List[int] = []
+    for _, _, nodes in segments:
+        if remaining_nodes <= 0:
+            seg_widths.append(0)
+            continue
+        w = max(1, round(nodes / remaining_nodes * remaining_width)) if nodes > 0 else 0
+        seg_widths.append(w)
+        remaining_width -= w
+        remaining_nodes -= nodes
 
-    for i in range(0, len(all_entries), n_cols):
-        row = all_entries[i : i + n_cols]
-        while len(row) < n_cols:
-            row.append(Text())
-        legend_grid.add_row(*row)
+    for (style, label, _), w in zip(segments, seg_widths):
+        if w <= 0:
+            continue
+        # Bar segment (colored block)
+        legend_bar.append(" " * w, style=style)
+        # Label row below — center the label if it fits, otherwise truncate
+        if len(label) <= w:
+            pad_left = (w - len(label)) // 2
+            pad_right = w - len(label) - pad_left
+            label_row.append(" " * pad_left)
+            label_row.append(label, style="bold")
+            label_row.append(" " * pad_right)
+        elif w >= 4:
+            label_row.append(label[: w - 1], style="bold")
+            label_row.append("…", style="dim")
+        else:
+            label_row.append(" " * w)
 
     return GridData(
-        header=Group(header, bar),
+        header=header,
         grid_text=grid,
-        legend=legend_grid,
+        legend=Group(legend_bar, label_row),
         cell_owners=cell_owners,
         grid_width=grid_width,
         grid_height=grid_height,
@@ -394,8 +414,12 @@ class _GridPanel(Widget, can_focus=True):
             self.post_message(ClusterGridWidget.CellClicked(owner))
 
 
-class _InfoPanel(Static):
-    """Header + legend area outside the border."""
+class _HeaderPanel(Static):
+    """Status header above the grid."""
+
+
+class _LegendBar(Static):
+    """Proportional legend bar below the grid."""
 
 
 class ClusterGridWidget(VerticalScroll):
@@ -416,16 +440,22 @@ class ClusterGridWidget(VerticalScroll):
         height: 1fr;
         padding: 1 2;
     }
-    ClusterGridWidget _InfoPanel {
+    ClusterGridWidget _HeaderPanel {
         height: auto;
+    }
+    ClusterGridWidget _LegendBar {
+        height: auto;
+        margin-top: 1;
     }
     """
 
     def compose(self):
-        yield _InfoPanel(id="cluster_info")
+        yield _HeaderPanel(id="cluster_header")
         yield _GridPanel(id="cluster_grid_panel")
+        yield _LegendBar(id="cluster_legend_bar")
 
     def update_from_snapshot(self, snapshot: SchedulerSnapshot) -> None:
         data = _build_grid(snapshot)
-        self.query_one(_InfoPanel).update(Group(data.header, Text(), data.legend))
+        self.query_one(_HeaderPanel).update(data.header)
         self.query_one(_GridPanel).set_grid(data)
+        self.query_one(_LegendBar).update(data.legend)
