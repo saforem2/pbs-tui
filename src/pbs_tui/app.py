@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib
+import logging
 import os
 import sys
 from collections import Counter
@@ -45,7 +46,10 @@ from .nodes import (
     first_requested_node,
     parse_node_count_spec,
 )
+from .cluster_grid import ClusterGridWidget
 from .ui_config import JOB_TABLE_COLUMNS
+
+_LOGGER = logging.getLogger(__name__)
 
 
 _TEXTUAL_APP_MODULE = importlib.import_module("textual.app")
@@ -627,6 +631,7 @@ class PBSTUI(App[None]):
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("r", "refresh", "Refresh now"),
+        ("g", "focus_cluster", "Focus cluster"),
         ("j", "focus_jobs", "Focus jobs"),
         ("n", "focus_nodes", "Focus nodes"),
         ("u", "focus_queues", "Focus queues"),
@@ -667,6 +672,8 @@ class PBSTUI(App[None]):
             with Vertical(id="left_panel"):
                 yield SummaryWidget(id="summary")
                 with TabbedContent(id="tabs"):
+                    with TabPane("Cluster", id="cluster_tab"):
+                        yield ClusterGridWidget(id="cluster_grid")
                     with TabPane("Jobs", id="jobs_tab"):
                         with Vertical(id="jobs_tab_content"):
                             yield Input(
@@ -698,7 +705,7 @@ class PBSTUI(App[None]):
         except Exception as exc:  # pragma: no cover - defensive
             message = f"Failed to refresh PBS data: {exc}"
             self.query_one(StatusBar).update_status(message, severity="error")
-            self.log.exception("Failed to refresh PBS data")
+            _LOGGER.exception("Failed to refresh PBS data")
         else:
             self._snapshot = snapshot
             self._update_tables(snapshot)
@@ -720,9 +727,11 @@ class PBSTUI(App[None]):
     def _update_tables(self, snapshot: SchedulerSnapshot) -> None:
         nodes_table = self.query_one(NodesTable)
         queues_table = self.query_one(QueuesTable)
+        cluster_grid = self.query_one(ClusterGridWidget)
         self._refresh_jobs_table()
         nodes_table.update_nodes(snapshot.nodes)
         queues_table.update_queues(snapshot.queues)
+        cluster_grid.update_from_snapshot(snapshot)
         self._job_index = {job.id: job for job in snapshot.jobs}
         self._node_index = {node.name: node for node in snapshot.nodes}
         self._queue_index = {queue.name: queue for queue in snapshot.queues}
@@ -773,6 +782,10 @@ class PBSTUI(App[None]):
 
     async def action_refresh(self) -> None:
         await self.refresh_data()
+
+    def action_focus_cluster(self) -> None:
+        self.query_one(TabbedContent).active = "cluster_tab"
+        self.query_one(ClusterGridWidget).focus()
 
     def action_focus_jobs(self) -> None:
         self.query_one(TabbedContent).active = "jobs_tab"

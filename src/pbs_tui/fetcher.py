@@ -366,10 +366,10 @@ class PBSDataFetcher:
             _LOGGER.warning(message)
             return None, message
         if process.returncode != 0:
-            message = stderr.decode().strip() or f"Command failed: {' '.join(cmd)}"
+            message = stderr.decode(errors="replace").strip() or f"Command failed: {' '.join(cmd)}"
             _LOGGER.warning("%s (exit %s)", message, process.returncode)
             return None, message
-        return stdout.decode(), None
+        return stdout.decode(errors="replace"), None
 
     def _parse_jobs_xml(self, xml_text: str) -> List[Job]:
         root = ET.fromstring(xml_text)
