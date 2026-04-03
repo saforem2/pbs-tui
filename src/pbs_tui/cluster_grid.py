@@ -145,15 +145,6 @@ def _format_remaining(td: Optional[timedelta]) -> str:
 
 # ── grid building ───────────────────────────────────────────────────────
 
-# Unicode box-drawing
-_TL = "╔"
-_TR = "╗"
-_BL = "╚"
-_BR = "╝"
-_H = "═"
-_V = "║"
-_BORDER = "dim"
-
 
 def _build_grid(
     snapshot: SchedulerSnapshot,
@@ -255,24 +246,13 @@ def _build_grid(
 
     # ── render grid ─────────────────────────────────────────────────
     grid = Text()
-    # Top border
-    grid.append(_TL, style=_BORDER)
-    grid.append(_H * grid_width, style=_BORDER)
-    grid.append(_TR + "\n", style=_BORDER)
-
     for row in range(grid_height):
-        grid.append(_V, style=_BORDER)
         for col in range(grid_width):
             idx = row * grid_width + col
             style, char = cell_data[idx]
             grid.append(char, style=style)
-        grid.append(_V, style=_BORDER)
-        grid.append("\n")
-
-    # Bottom border
-    grid.append(_BL, style=_BORDER)
-    grid.append(_H * grid_width, style=_BORDER)
-    grid.append(_BR, style=_BORDER)
+        if row < grid_height - 1:
+            grid.append("\n")
 
     # ── render legend (grid below the chart) ──────────────────────────
     def _fg(bg_style: str) -> str:
@@ -314,10 +294,18 @@ def _build_grid(
             row.append(Text())
         legend_grid.add_row(*row)
 
-    return Group(header, bar, Text(), grid, Text(), legend_grid)
+    return Group(header, bar), grid, legend_grid
 
 
 # ── widget ──────────────────────────────────────────────────────────────
+
+
+class _GridPanel(Static):
+    """The coloured grid area — gets a Textual border."""
+
+
+class _InfoPanel(Static):
+    """Header + legend area outside the border."""
 
 
 class ClusterGridWidget(Static):
@@ -328,10 +316,25 @@ class ClusterGridWidget(Static):
 
     DEFAULT_CSS = """
     ClusterGridWidget {
+        layout: vertical;
         height: 1fr;
         padding: 1 2;
     }
+    ClusterGridWidget _InfoPanel {
+        height: auto;
+    }
+    ClusterGridWidget _GridPanel {
+        border: round $surface-lighten-2;
+        height: 1fr;
+        padding: 0 1;
+    }
     """
 
+    def compose(self):
+        yield _InfoPanel(id="cluster_info")
+        yield _GridPanel(id="cluster_grid_panel")
+
     def update_from_snapshot(self, snapshot: SchedulerSnapshot) -> None:
-        self.update(_build_grid(snapshot))
+        header, grid, legend = _build_grid(snapshot)
+        self.query_one(_InfoPanel).update(Group(header, Text(), legend))
+        self.query_one(_GridPanel).update(grid)
