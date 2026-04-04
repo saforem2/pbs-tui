@@ -59,6 +59,7 @@ def _darken(hex_color: str, factor: float = 0.35) -> str:
     return _rgb_to_hex(int(r2 * 255), int(g2 * 255), int(b2 * 255))
 
 
+
 def _desaturate(hex_color: str, factor: float = 0.5) -> str:
     """Return a muted/desaturated variant of *hex_color*."""
     r, g, b = _hex_to_rgb(hex_color)
@@ -97,7 +98,6 @@ def _build_palette(theme_vars: Dict[str, str]) -> "Palette":
 
     # Aggregated queue colours: desaturated seeds
     agg_colors = [_desaturate(s, 0.55) for s in seeds]
-    agg_alt_colors = [_darken(c, 0.35) for c in agg_colors]
 
     # Background-derived colours
     bg = theme_vars.get("background", "#0B1220").strip()
@@ -110,9 +110,7 @@ def _build_palette(theme_vars: Dict[str, str]) -> "Palette":
     return Palette(
         job_styles=job_styles,
         agg_colors=agg_colors,
-        agg_alt_colors=agg_alt_colors,
-        empty_style=f"on {_darken(surface, 0.1)}",
-        empty_alt_style=f"on {_darken(surface, 0.3)}",
+        empty_style=f"on {_darken(surface, 0.05)}",
         sep_style=f"on {bg}",
     )
 
@@ -120,35 +118,27 @@ def _build_palette(theme_vars: Dict[str, str]) -> "Palette":
 class Palette:
     """Resolved colour palette for the cluster grid."""
 
-    __slots__ = (
-        "job_styles", "agg_colors", "agg_alt_colors",
-        "empty_style", "empty_alt_style", "sep_style",
-    )
+    __slots__ = ("job_styles", "agg_colors", "empty_style", "sep_style")
 
     def __init__(
         self,
         job_styles: List[str],
         agg_colors: List[str],
-        agg_alt_colors: List[str],
         empty_style: str,
-        empty_alt_style: str,
         sep_style: str,
     ) -> None:
         self.job_styles = job_styles
         self.agg_colors = agg_colors
-        self.agg_alt_colors = agg_alt_colors
         self.empty_style = empty_style
-        self.empty_alt_style = empty_alt_style
         self.sep_style = sep_style
 
     def job_style(self, idx: int) -> str:
         return self.job_styles[idx % len(self.job_styles)]
 
-    def agg_style(self, queue_name: str) -> Tuple[str, str]:
-        """Return (primary, alt) styles for an aggregated queue."""
-        # Hash queue name to pick a consistent color
+    def agg_style(self, queue_name: str) -> str:
+        """Return a style for an aggregated queue."""
         i = hash(queue_name) % len(self.agg_colors)
-        return f"on {self.agg_colors[i]}", f"on {self.agg_alt_colors[i]}"
+        return f"on {self.agg_colors[i]}"
 
 # Queues whose running jobs are always merged into a single coloured block
 AGGREGATED_QUEUES = frozenset(
@@ -308,7 +298,6 @@ def _build_grid(
 
     # ── assign cells ────────────────────────────────────────────────
     cell_styles: List[str] = [palette.empty_style] * total_cells
-    cell_alt: List[str] = [palette.empty_alt_style] * total_cells
     cell_owners: List[Optional[str]] = [None] * total_cells
     current = 0
 
@@ -320,7 +309,6 @@ def _build_grid(
         nonlocal current
         if current > 0 and current < total_cells:
             cell_styles[current] = palette.sep_style
-            cell_alt[current] = palette.sep_style
             cell_owners[current] = None
             current += 1
 
@@ -332,7 +320,6 @@ def _build_grid(
         for _ in range(cells_needed):
             if current < total_cells:
                 cell_styles[current] = style
-                cell_alt[current] = style
                 cell_owners[current] = job.id
                 current += 1
         prev_owner = job.id
@@ -343,14 +330,13 @@ def _build_grid(
     # Aggregated queues — striped
     agg_legend: List[Tuple[str, str, int]] = []
     for queue_name, nodes in agg_queue_nodes.items():
-        style, alt = palette.agg_style(queue_name)
+        style = palette.agg_style(queue_name)
         cells_needed = max(1, int(nodes / nodes_per_cell))
         if prev_owner is not None:
             _insert_sep()
         for _ in range(cells_needed):
             if current < total_cells:
                 cell_styles[current] = style
-                cell_alt[current] = alt
                 cell_owners[current] = f"queue:{queue_name}"
                 current += 1
         prev_owner = f"queue:{queue_name}"
@@ -392,8 +378,7 @@ def _build_grid(
     header.append(f"{queued_jobs}", style="bold")
     header.append("Q", style="dim yellow")
 
-    # ── render grid (half-block with stripes) ─────────────────────────
-    # Odd logical rows use alt style → creates horizontal stripe texture
+    # ── render grid (half-block) ──────────────────────────────────────
     grid = Text()
     text_rows = grid_height // 2
     for text_row in range(text_rows):
@@ -402,9 +387,9 @@ def _build_grid(
         for col in range(grid_width):
             top_idx = top_row * grid_width + col
             bot_idx = bot_row * grid_width + col
-            top_s = cell_styles[top_idx] if top_row % 2 == 0 else cell_alt[top_idx]
-            bot_s = cell_styles[bot_idx] if bot_row % 2 == 0 else cell_alt[bot_idx]
-            grid.append("▀", style=f"{_fg(top_s)} {bot_s}")
+            top_fg = _fg(cell_styles[top_idx])
+            bot_bg = cell_styles[bot_idx]
+            grid.append("▀", style=f"{top_fg} {bot_bg}")
         if text_row < text_rows - 1:
             grid.append("\n")
 
