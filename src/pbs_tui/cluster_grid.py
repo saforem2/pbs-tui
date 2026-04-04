@@ -100,9 +100,6 @@ def _build_palette(theme_vars: Dict[str, str]) -> "Palette":
     agg_colors = [_desaturate(s, 0.55) for s in seeds]
 
     # Background-derived colours
-    bg = theme_vars.get("background", "#0B1220").strip()
-    if not bg.startswith("#"):
-        bg = "#0B1220"
     surface = theme_vars.get("surface", "#141B2D").strip()
     if not surface.startswith("#"):
         surface = "#141B2D"
@@ -111,26 +108,23 @@ def _build_palette(theme_vars: Dict[str, str]) -> "Palette":
         job_styles=job_styles,
         agg_colors=agg_colors,
         empty_style=f"on {_darken(surface, 0.05)}",
-        sep_style=f"on {bg}",
     )
 
 
 class Palette:
     """Resolved colour palette for the cluster grid."""
 
-    __slots__ = ("job_styles", "agg_colors", "empty_style", "sep_style")
+    __slots__ = ("job_styles", "agg_colors", "empty_style")
 
     def __init__(
         self,
         job_styles: List[str],
         agg_colors: List[str],
         empty_style: str,
-        sep_style: str,
     ) -> None:
         self.job_styles = job_styles
         self.agg_colors = agg_colors
         self.empty_style = empty_style
-        self.sep_style = sep_style
 
     def job_style(self, idx: int) -> str:
         return self.job_styles[idx % len(self.job_styles)]
@@ -267,13 +261,7 @@ def _build_grid(
     grid_width: int = 100,
     grid_height: int = 28,
 ) -> GridData:
-    """Build the cluster grid data.
-
-    *grid_height* must be even (each text row encodes two logical rows via
-    half-block characters).
-    """
-
-    grid_height = grid_height if grid_height % 2 == 0 else grid_height + 1
+    """Build the cluster grid data."""
 
     total_nodes = max(len(snapshot.nodes), 1)
     total_cells = grid_width * grid_height
@@ -303,48 +291,29 @@ def _build_grid(
 
     legend_entries: List[Tuple[str, str, str, int, str]] = []
 
-    prev_owner: Optional[str] = None
-
-    def _insert_sep() -> None:
-        nonlocal current
-        if current > 0 and current < total_cells:
-            cell_styles[current] = palette.sep_style
-            cell_owners[current] = None
-            current += 1
-
     for idx, (job, nc) in enumerate(large_queue_jobs):
         style = palette.job_style(idx)
         cells_needed = max(1, int(nc / nodes_per_cell))
-        if prev_owner is not None:
-            _insert_sep()
         for _ in range(cells_needed):
             if current < total_cells:
                 cell_styles[current] = style
                 cell_owners[current] = job.id
                 current += 1
-        prev_owner = job.id
         remaining = _time_remaining(job, ref)
         time_str = _format_remaining(remaining)
         legend_entries.append((style, job.user, job.queue, nc, time_str))
 
-    # Aggregated queues — striped
+    # Aggregated queues
     agg_legend: List[Tuple[str, str, int]] = []
     for queue_name, nodes in agg_queue_nodes.items():
         style = palette.agg_style(queue_name)
         cells_needed = max(1, int(nodes / nodes_per_cell))
-        if prev_owner is not None:
-            _insert_sep()
         for _ in range(cells_needed):
             if current < total_cells:
                 cell_styles[current] = style
                 cell_owners[current] = f"queue:{queue_name}"
                 current += 1
-        prev_owner = f"queue:{queue_name}"
         agg_legend.append((style, queue_name, nodes))
-
-    # Separator before empty/available region
-    if prev_owner is not None and current < total_cells:
-        _insert_sep()
 
     # Stats
     running_nodes = sum(nc for _, nc in large_queue_jobs) + sum(agg_queue_nodes.values())
@@ -378,19 +347,13 @@ def _build_grid(
     header.append(f"{queued_jobs}", style="bold")
     header.append("Q", style="dim yellow")
 
-    # ── render grid (half-block) ──────────────────────────────────────
+    # ── render grid ─────────────────────────────────────────────────
     grid = Text()
-    text_rows = grid_height // 2
-    for text_row in range(text_rows):
-        top_row = text_row * 2
-        bot_row = text_row * 2 + 1
+    for row in range(grid_height):
         for col in range(grid_width):
-            top_idx = top_row * grid_width + col
-            bot_idx = bot_row * grid_width + col
-            top_fg = _fg(cell_styles[top_idx])
-            bot_bg = cell_styles[bot_idx]
-            grid.append("▀", style=f"{top_fg} {bot_bg}")
-        if text_row < text_rows - 1:
+            idx = row * grid_width + col
+            grid.append(" ", style=cell_styles[idx])
+        if row < grid_height - 1:
             grid.append("\n")
 
     # ── proportional legend bar ─────────────────────────────────────
@@ -493,14 +456,12 @@ class _GridPanel(Widget):
         if not self._cell_owners or self._grid_width == 0:
             return
         col = int(event.x)
-        # Each text row = 2 logical rows (half-block rendering)
-        text_row = int(event.y)
-        logical_row = text_row * 2  # top half of clicked row
+        row = int(event.y)
         if col < 0 or col >= self._grid_width:
             return
-        if logical_row < 0 or logical_row >= self._grid_height:
+        if row < 0 or row >= self._grid_height:
             return
-        idx = logical_row * self._grid_width + col
+        idx = row * self._grid_width + col
         if idx < 0 or idx >= len(self._cell_owners):
             return
         owner = self._cell_owners[idx]
@@ -562,8 +523,7 @@ class ClusterGridWidget(VerticalScroll):
         panel = self.query_one(_GridPanel)
         # Use the panel's content area for grid dimensions
         w = panel.size.width - 4 if panel.size.width > 10 else 100
-        h = (panel.size.height - 2) * 2 if panel.size.height > 4 else 28
-        h = h if h % 2 == 0 else h + 1
+        h = panel.size.height - 2 if panel.size.height > 4 else 14
 
         # Build palette from current theme
         try:
