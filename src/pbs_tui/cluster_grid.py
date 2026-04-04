@@ -64,20 +64,20 @@ def _desaturate(hex_color: str, factor: float = 0.5) -> str:
 
 # ANSI colors as the primary job palette — maximum contrast, works everywhere
 _ANSI_JOB_STYLES = [
-    "on ansi_blue",
-    "on ansi_red",
-    "on ansi_green",
-    "on ansi_magenta",
-    "on ansi_cyan",
-    "on ansi_yellow",
-    "on ansi_bright_blue",
-    "on ansi_bright_red",
-    "on ansi_bright_green",
-    "on ansi_bright_magenta",
-    "on ansi_bright_cyan",
-    "on ansi_bright_yellow",
-    "on ansi_white",
-    "on ansi_bright_black",
+    "on blue",
+    "on red",
+    "on green",
+    "on magenta",
+    "on cyan",
+    "on yellow",
+    "on bright_blue",
+    "on bright_red",
+    "on bright_green",
+    "on bright_magenta",
+    "on bright_cyan",
+    "on bright_yellow",
+    "on white",
+    "on bright_black",
 ]
 
 def _build_palette(theme_vars: Dict[str, str]) -> "Palette":
