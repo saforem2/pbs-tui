@@ -438,55 +438,34 @@ def _build_grid(
         remaining_width -= w
         remaining_nodes -= nodes
 
-    # Circled number glyphs for compact references
-    _CIRCLED = "❶❷❸❹❺❻❼❽❾❿⓫⓬⓭⓮⓯⓰⓱⓲⓳⓴"
-
+    # Render the proportional bar — labels inside when they fit, else blank
     legend_bar = Text()
-    label_row = Text()
-    footnotes: List[Tuple[str, str, str]] = []  # (number_str, style, full_label)
+    footnotes: List[Tuple[str, str]] = []  # (style, full_label) for narrow segments
 
-    for i, ((style, label, _), w) in enumerate(zip(segments, seg_widths)):
+    for (style, label, _), w in zip(segments, seg_widths):
         if w <= 0:
             continue
-        # Decide what text to show in the bar segment
         if len(label) + 2 <= w:
-            # Label fits with padding
-            bar_label = label
-            pad_left = (w - len(bar_label)) // 2
-            pad_right = w - len(bar_label) - pad_left
+            pad_left = (w - len(label)) // 2
+            pad_right = w - len(label) - pad_left
             legend_bar.append(" " * pad_left, style=style)
-            legend_bar.append(bar_label, style=f"bold {style}")
+            legend_bar.append(label, style=f"bold {style}")
             legend_bar.append(" " * pad_right, style=style)
-            # Label row mirrors
-            label_row.append(" " * pad_left)
-            label_row.append(bar_label, style="bold")
-            label_row.append(" " * pad_right)
         else:
-            # Too narrow — show a number in the bar, add a footnote
-            num_str = _CIRCLED[i] if i < len(_CIRCLED) else f"{i + 1}"
-            footnotes.append((num_str, style, label))
-            # Center the number in the segment
-            pad_left = (w - 1) // 2
-            pad_right = w - 1 - pad_left
-            legend_bar.append(" " * pad_left, style=style)
-            legend_bar.append(num_str, style=f"bold {style}")
-            legend_bar.append(" " * pad_right, style=style)
-            # Label row: just the number
-            label_row.append(" " * pad_left)
-            label_row.append(num_str, style="bold")
-            label_row.append(" " * pad_right)
+            legend_bar.append(" " * w, style=style)
+            footnotes.append((style, label))
 
-    # Footnotes row — numbered key for segments that didn't fit
-    footnote_text = Text()
+    # Footnote list for segments too narrow for inline labels
+    footnote_text = Text(no_wrap=False)
     if footnotes:
-        for num_str, style, full_label in footnotes:
-            footnote_text.append(f"  {num_str} ", style=_fg(style))
-            footnote_text.append(full_label, style="dim")
+        for style, full_label in footnotes:
+            footnote_text.append("  ██", style=_fg(style))
+            footnote_text.append(f" {full_label}", style="dim")
 
     return GridData(
         header=header,
         grid_text=grid,
-        legend=Group(legend_bar, label_row, footnote_text) if footnotes else Group(legend_bar, label_row),
+        legend=Group(legend_bar, footnote_text) if footnotes else legend_bar,
         cell_owners=cell_owners,
         grid_width=grid_width,
         grid_height=grid_height,
@@ -503,6 +482,7 @@ class _GridPanel(Widget):
     _GridPanel {
         border: round $surface-lighten-2;
         height: 1fr;
+        min-height: 10;
         padding: 0 1;
     }
     """

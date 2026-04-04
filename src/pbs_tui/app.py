@@ -317,53 +317,27 @@ class SummaryWidget(Static):
     def update_from_snapshot(self, snapshot: SchedulerSnapshot) -> None:
         job_counts = Counter(job.state for job in snapshot.jobs if job.state)
         node_counts = Counter(node.primary_state() for node in snapshot.nodes)
-        queue_enabled = sum(1 for queue in snapshot.queues if queue.enabled)
-        queue_started = sum(1 for queue in snapshot.queues if queue.started)
-        total_queues = len(snapshot.queues)
 
-        job_table = Table.grid(padding=(0, 1))
-        job_table.add_column(justify="left")
-        job_table.add_row(Text(f"Total: {len(snapshot.jobs)}", style="bold"))
+        line = Text()
+        # Jobs
+        line.append("Jobs ", style="bold cyan")
+        line.append(f"{len(snapshot.jobs)}", style="bold")
         if job_counts:
-            for state, count in sorted(job_counts.items()):
-                label = JOB_STATE_LABELS.get(state, state)
-                job_table.add_row(f"{label}: {count}")
-        else:
-            job_table.add_row("No jobs")
-
-        node_table = Table.grid(padding=(0, 1))
-        node_table.add_column(justify="left")
-        node_table.add_row(Text(f"Total: {len(snapshot.nodes)}", style="bold"))
+            parts = [f"{JOB_STATE_LABELS.get(s, s)[0]}:{c}" for s, c in sorted(job_counts.items())]
+            line.append(f" ({', '.join(parts)})", style="dim")
+        # Nodes
+        line.append("    Nodes ", style="bold green")
+        line.append(f"{len(snapshot.nodes)}", style="bold")
         if node_counts:
-            for state, count in sorted(node_counts.items()):
-                node_table.add_row(f"{state}: {count}")
-        else:
-            node_table.add_row("No nodes")
+            parts = [f"{s}:{c}" for s, c in sorted(node_counts.items())]
+            line.append(f" ({', '.join(parts)})", style="dim")
+        # Queues
+        total_queues = len(snapshot.queues)
+        queue_enabled = sum(1 for q in snapshot.queues if q.enabled)
+        line.append("    Queues ", style="bold magenta")
+        line.append(f"{queue_enabled}/{total_queues}", style="bold")
 
-        queue_table = Table.grid(padding=(0, 1))
-        queue_table.add_column(justify="left")
-        queue_table.add_row(Text(f"Total: {total_queues}", style="bold"))
-        queue_table.add_row(f"Enabled: {queue_enabled}")
-        queue_table.add_row(f"Started: {queue_started}")
-        queue_job_counts = Counter()
-        for queue in snapshot.queues:
-            for state, count in queue.job_states.items():
-                queue_job_counts[state] += count
-        for state_code in ("R", "Q", "H"):
-            if queue_job_counts.get(state_code):
-                label = JOB_STATE_LABELS.get(state_code, state_code)
-                queue_table.add_row(f"{label}: {queue_job_counts[state_code]}")
-
-        grid = Table.grid(expand=True)
-        grid.add_column()
-        grid.add_column()
-        grid.add_column()
-        grid.add_row(
-            Panel(job_table, title="Jobs", border_style="cyan"),
-            Panel(node_table, title="Nodes", border_style="green"),
-            Panel(queue_table, title="Queues", border_style="magenta"),
-        )
-        self.update(grid)
+        self.update(line)
 
 
 class StatusBar(Static):

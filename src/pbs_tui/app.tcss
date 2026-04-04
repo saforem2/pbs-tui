@@ -19,9 +19,8 @@ Header {
 }
 
 #summary {
-    border: round $surface;
+    height: auto;
     padding: 0 1;
-    margin-bottom: 1;
 }
 
 TabbedContent {
