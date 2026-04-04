@@ -223,7 +223,7 @@ class GridData:
     """Holds the result of building the cluster grid."""
 
     __slots__ = (
-        "header", "grid_text", "legend", "cell_owners",
+        "header", "grid_text", "legend", "cell_owners", "cell_styles",
         "grid_width", "grid_height",
     )
 
@@ -233,6 +233,7 @@ class GridData:
         grid_text: Text,
         legend: RenderableType,
         cell_owners: List[Optional[str]],
+        cell_styles: List[str],
         grid_width: int,
         grid_height: int,
     ) -> None:
@@ -240,6 +241,7 @@ class GridData:
         self.grid_text = grid_text
         self.legend = legend
         self.cell_owners = cell_owners
+        self.cell_styles = cell_styles
         self.grid_width = grid_width
         self.grid_height = grid_height
 
@@ -410,6 +412,7 @@ def _build_grid(
         grid_text=grid,
         legend=Group(legend_bar, footnote_text) if footnotes else legend_bar,
         cell_owners=cell_owners,
+        cell_styles=cell_styles,
         grid_width=grid_width,
         grid_height=grid_height,
     )
@@ -434,6 +437,7 @@ class _GridPanel(Widget):
         super().__init__(**kwargs)
         self._content: RenderableType = Text()
         self._cell_owners: List[Optional[str]] = []
+        self._cell_styles: List[str] = []
         self._grid_width: int = 0
         self._grid_height: int = 0
 
@@ -443,6 +447,7 @@ class _GridPanel(Widget):
     def set_grid(self, data: GridData) -> None:
         self._content = data.grid_text
         self._cell_owners = data.cell_owners
+        self._cell_styles = data.cell_styles
         self._grid_width = data.grid_width
         self._grid_height = data.grid_height
         self.refresh()
@@ -461,7 +466,8 @@ class _GridPanel(Widget):
             return
         owner = self._cell_owners[idx]
         if owner:
-            self.post_message(ClusterGridWidget.CellClicked(owner))
+            style = self._cell_styles[idx] if idx < len(self._cell_styles) else ""
+            self.post_message(ClusterGridWidget.CellClicked(owner, style))
 
 
 class _HeaderPanel(Static):
@@ -482,9 +488,10 @@ class ClusterGridWidget(VerticalScroll):
     class CellClicked(Message):
         """Posted when a grid cell is clicked."""
 
-        def __init__(self, owner: str) -> None:
+        def __init__(self, owner: str, color_style: str = "") -> None:
             super().__init__()
             self.owner = owner
+            self.color_style = color_style
 
     DEFAULT_CSS = """
     ClusterGridWidget {

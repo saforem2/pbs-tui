@@ -835,6 +835,9 @@ class PBSTUI(App[None]):
     ) -> None:
         if self._snapshot is None or not self._detail_panel_enabled:
             return
+        details = self.query_one(DetailPanel)
+        # Extract color from style like "on blue" or "on #b49ece"
+        color = event.color_style.replace("on ", "", 1) if event.color_style.startswith("on ") else ""
         owner = event.owner
         if owner.startswith("queue:"):
             queue_name = owner[6:]
@@ -844,7 +847,9 @@ class PBSTUI(App[None]):
                 self._selected_job_id = None
                 self._selected_node_name = None
                 self._detail_source = "queue"
-                self.query_one(DetailPanel).show_queue(queue)
+                details.show_queue(queue)
+                if color:
+                    details.styles.border = ("tall", color)
         else:
             job = self._job_index.get(owner)
             if job:
@@ -852,9 +857,11 @@ class PBSTUI(App[None]):
                 self._selected_node_name = None
                 self._selected_queue_name = None
                 self._detail_source = "job"
-                self.query_one(DetailPanel).show_job(
+                details.show_job(
                     job, reference_time=self._snapshot.timestamp
                 )
+                if color:
+                    details.styles.border = ("tall", color)
 
     def _update_detail_panel(self, *, reference_time: Optional[datetime] = None) -> None:
         """Refresh the detail panel based on current selection and visibility."""
