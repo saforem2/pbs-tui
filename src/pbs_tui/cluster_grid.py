@@ -286,6 +286,7 @@ def _build_grid(
 
     # ── assign cells ────────────────────────────────────────────────
     cell_styles: List[str] = [palette.empty_style] * total_cells
+    cell_chars: List[str] = ["▒"] * total_cells  # default: textured empty
     cell_owners: List[Optional[str]] = [None] * total_cells
     current = 0
 
@@ -297,13 +298,14 @@ def _build_grid(
         for _ in range(cells_needed):
             if current < total_cells:
                 cell_styles[current] = style
+                cell_chars[current] = " "  # solid fill for jobs
                 cell_owners[current] = job.id
                 current += 1
         remaining = _time_remaining(job, ref)
         time_str = _format_remaining(remaining)
         legend_entries.append((style, job.user, job.queue, nc, time_str))
 
-    # Aggregated queues
+    # Aggregated queues — textured with ░
     agg_legend: List[Tuple[str, str, int]] = []
     for queue_name, nodes in agg_queue_nodes.items():
         style = palette.agg_style(queue_name)
@@ -311,6 +313,7 @@ def _build_grid(
         for _ in range(cells_needed):
             if current < total_cells:
                 cell_styles[current] = style
+                cell_chars[current] = "░"
                 cell_owners[current] = f"queue:{queue_name}"
                 current += 1
         agg_legend.append((style, queue_name, nodes))
@@ -352,7 +355,7 @@ def _build_grid(
     for row in range(grid_height):
         for col in range(grid_width):
             idx = row * grid_width + col
-            grid.append(" ", style=cell_styles[idx])
+            grid.append(cell_chars[idx], style=cell_styles[idx])
         if row < grid_height - 1:
             grid.append("\n")
 
