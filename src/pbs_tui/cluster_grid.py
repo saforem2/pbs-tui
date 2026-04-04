@@ -41,15 +41,6 @@ def _rgb_to_hex(r: int, g: int, b: int) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-def _shift_hue(hex_color: str, degrees: float) -> str:
-    """Rotate the hue of *hex_color* by *degrees*."""
-    r, g, b = _hex_to_rgb(hex_color)
-    h, l, s = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
-    h = (h + degrees / 360) % 1.0
-    r2, g2, b2 = colorsys.hls_to_rgb(h, l, s)
-    return _rgb_to_hex(int(r2 * 255), int(g2 * 255), int(b2 * 255))
-
-
 def _darken(hex_color: str, factor: float = 0.35) -> str:
     """Return a darker variant of *hex_color*."""
     r, g, b = _hex_to_rgb(hex_color)
@@ -70,8 +61,32 @@ def _desaturate(hex_color: str, factor: float = 0.5) -> str:
     return _rgb_to_hex(int(r2 * 255), int(g2 * 255), int(b2 * 255))
 
 
+
+# ANSI colors as the primary job palette — maximum contrast, works everywhere
+_ANSI_JOB_STYLES = [
+    "on ansi_blue",
+    "on ansi_red",
+    "on ansi_green",
+    "on ansi_magenta",
+    "on ansi_cyan",
+    "on ansi_yellow",
+    "on ansi_bright_blue",
+    "on ansi_bright_red",
+    "on ansi_bright_green",
+    "on ansi_bright_magenta",
+    "on ansi_bright_cyan",
+    "on ansi_bright_yellow",
+    "on ansi_white",
+    "on ansi_bright_black",
+]
+
 def _build_palette(theme_vars: Dict[str, str]) -> "Palette":
-    """Build a full colour palette from resolved theme variables."""
+    """Build a colour palette using ANSI colors + theme surface for empties."""
+    surface = theme_vars.get("surface", "#141B2D").strip()
+    if not surface.startswith("#"):
+        surface = "#141B2D"
+
+    # For aggregated queues: desaturate the theme seeds for muted tones
     seeds: List[str] = []
     for key in _THEME_SEED_KEYS:
         val = theme_vars.get(key, "").strip()
@@ -79,33 +94,10 @@ def _build_palette(theme_vars: Dict[str, str]) -> "Palette":
             seeds.append(val)
     if not seeds:
         seeds = list(_FALLBACK_SEEDS)
-
-    # Generate job colours: each seed + hue-shifted variants
-    job_colors: List[str] = []
-    shifts = [0, 30, -30]
-    for seed in seeds:
-        for deg in shifts:
-            c = _shift_hue(seed, deg) if deg else seed
-            job_colors.append(c)
-    # Deduplicate while preserving order
-    seen = set()
-    unique: List[str] = []
-    for c in job_colors:
-        if c not in seen:
-            seen.add(c)
-            unique.append(c)
-    job_styles = [f"on {c}" for c in unique]
-
-    # Aggregated queue colours: desaturated seeds
-    agg_colors = [_desaturate(s, 0.55) for s in seeds]
-
-    # Background-derived colours
-    surface = theme_vars.get("surface", "#141B2D").strip()
-    if not surface.startswith("#"):
-        surface = "#141B2D"
+    agg_colors = [_desaturate(s, 0.6) for s in seeds]
 
     return Palette(
-        job_styles=job_styles,
+        job_styles=list(_ANSI_JOB_STYLES),
         agg_colors=agg_colors,
         empty_style=f"on {_darken(surface, 0.05)}",
     )
