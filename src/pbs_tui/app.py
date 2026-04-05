@@ -102,9 +102,46 @@ if HAS_TEXTUAL_THEME_SUPPORT:
         boost="#4338CA",
         dark=False,
     )
+
+    # ANSI-based themes: map Textual colors to the terminal's 16-color palette.
+    # These inherit whatever the user's terminal colorscheme defines for
+    # color0-color15, so the app blends naturally with their setup.
+    ANSI_DARK_THEME = _TextualTheme(
+        "ansi-dark",
+        primary="#5F87AF",     # ANSI 67  — muted blue
+        secondary="#5FAFAF",   # ANSI 73  — teal
+        warning="#D7AF5F",     # ANSI 179 — amber
+        error="#AF5F5F",       # ANSI 131 — muted red
+        success="#5FAF5F",     # ANSI 71  — green
+        accent="#AF87D7",      # ANSI 140 — lavender
+        foreground="#C0C0C0",  # ANSI 7   — silver (light gray)
+        background="#1C1C1C",  # ANSI 234 — near-black
+        surface="#262626",     # ANSI 235 — dark gray
+        panel="#262626",
+        boost="#D787AF",       # ANSI 175 — pink
+        dark=True,
+    )
+
+    ANSI_LIGHT_THEME = _TextualTheme(
+        "ansi-light",
+        primary="#005FAF",     # ANSI 25  — dark blue
+        secondary="#008787",   # ANSI 30  — dark teal
+        warning="#AF8700",     # ANSI 136 — dark amber
+        error="#AF0000",       # ANSI 124 — dark red
+        success="#008700",     # ANSI 28  — dark green
+        accent="#5F00AF",      # ANSI 55  — purple
+        foreground="#303030",  # ANSI 236 — dark gray
+        background="#EEEEEE",  # ANSI 255 — near-white
+        surface="#FFFFFF",     # white
+        panel="#FFFFFF",
+        boost="#870087",       # ANSI 90  — dark magenta
+        dark=False,
+    )
 else:  # pragma: no cover - legacy Textual without Theme helper
     PBS_DARK_THEME = None
     PBS_LIGHT_THEME = None
+    ANSI_DARK_THEME = None
+    ANSI_LIGHT_THEME = None
 
 
 
@@ -529,7 +566,8 @@ This dashboard provides a quick overview of the PBS scheduler state.
 ## Themes
 
 Use the command palette's **Change theme** action to switch between the bundled
-`pbs-dark`/`pbs-light` themes or Textual's defaults.
+`pbs-dark`/`pbs-light`/`ansi-dark`/`ansi-light` themes or Textual's defaults.
+The `ansi-*` themes use muted colors from the terminal's palette.
 
 ## Jobs table filtering
 
@@ -625,6 +663,10 @@ class PBSTUI(App[None]):
         if HAS_TEXTUAL_THEME_SUPPORT and PBS_DARK_THEME and PBS_LIGHT_THEME:
             self.register_theme(PBS_DARK_THEME)
             self.register_theme(PBS_LIGHT_THEME)
+            if ANSI_DARK_THEME:
+                self.register_theme(ANSI_DARK_THEME)
+            if ANSI_LIGHT_THEME:
+                self.register_theme(ANSI_LIGHT_THEME)
             self.theme = PBS_DARK_THEME.name
         self.fetcher = fetcher or PBSDataFetcher()
         self.refresh_interval = refresh_interval
