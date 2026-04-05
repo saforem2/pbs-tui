@@ -8,14 +8,17 @@ The dashboard surfaces job,
 queue, and node activity in a single view and refreshes itself automatically so operators can
 track workload health in real time.
 
-<center>
-<img width=49% src="https://github.com/user-attachments/assets/49bbdd98-9670-4064-bea1-948dda949b64" /> <img width=49% src="https://github.com/user-attachments/assets/4f1c4503-2478-436e-91da-13c421da7523" /> 
+<p align="center">
+<img width="49%" src="assets/topology-dark.png" alt="Cluster grid (dark)" />
+<img width="49%" src="assets/queue-dark.png" alt="Jobs table (dark)" />
+</p>
 
-<details closed><summary>more themes:</summary>
-<img alt="catpuccin-latte" width=49% src="https://github.com/user-attachments/assets/cb820657-3e2a-4b39-a83e-974383ad9da4" /> <img alt="tokyo-night" width=49% src="https://github.com/user-attachments/assets/b32b4024-9bb5-4054-8526-4ef46e19b4b5" />
-
+<details><summary>Light theme</summary>
+<p align="center">
+<img width="49%" src="assets/topology-light.png" alt="Cluster grid (light)" />
+<img width="49%" src="assets/queue-light.png" alt="Jobs table (light)" />
+</p>
 </details>
-</center>
 
 
 <!--
@@ -35,15 +38,19 @@ track workload health in real time.
 
 ## Features
 
+- **Cluster grid** – visual map of cluster node utilization with proportional legend bar.
+  Click a job block to see its details. Colors adapt to the active theme.
 - **Live PBS data** – prefers the JSON (`-F json`) output of `qstat`/`pbsnodes` and falls back to
   XML or text parsing so schedulers without newer flags continue to work.
 - **Automatic refresh** – updates every 30 seconds by default with a manual refresh binding
   (`r`).
-- **Summary cards** – quick totals for job states, node states, and queue health.
 - **Rich tables** – sortable (via cursor) tables for jobs, nodes, and queues with detail views
   for the selected record.
-- **Fallback sample data** – optional bundled data makes it easy to demo the interface without
-  connecting to a production scheduler (`PBS_TUI_SAMPLE_DATA=1`).
+- **Themes** – ships with `pbs-dark`, `pbs-light`, `ansi-dark`, and `ansi-light` themes.
+  The `ansi-*` variants use muted 256-color palette tones that blend with your terminal
+  colorscheme. Switch via the command palette (`Ctrl+P`).
+- **Fallback sample data** – bundled realistic mock cluster (~560 nodes, ~40 jobs) for demoing
+  without a production scheduler (`PBS_TUI_SAMPLE_DATA=1`).
 - **Inline snapshot** – render the current queue as a Rich table with `pbs-tui --inline` and
   optionally write a Markdown summary alongside it.
 
@@ -85,9 +92,11 @@ faster polling loop.
 |:---:|:---------------------- |
 | `q` | Quit the application   |
 | `r` | Refresh immediately    |
+| `g` | Focus the cluster grid |
 | `j` | Focus the jobs table   |
 | `n` | Focus the nodes table  |
 | `u` | Focus the queues table |
+| `d` | Toggle detail panel    |
 
 Use tab and the arrow keys/`PageUp`/`PageDown` to move through rows once a table has focus.
 
@@ -142,32 +151,10 @@ attributes.
 
 ## Screenshots
 
-<!--
-- `pbs-tui`:
+- Cluster grid (dark / light):
 
-  <img width="2498" height="1828" alt="ScreenShot-2025-09-16-172415@2x" src="https://github.com/user-attachments/assets/419cecb6-25a1-4007-8456-38bd80fb4ae7" />
--->
+  <img width="49%" src="assets/topology-dark.png" alt="Cluster grid dark" /> <img width="49%" src="assets/topology-light.png" alt="Cluster grid light" />
 
-- Live filter: (use tab to navigate to filter pane)
+- Jobs table with detail panel (dark / light):
 
-  <img width="3206" height="2482" alt="ScreenShot-2025-11-10-152623@2x" src="https://github.com/user-attachments/assets/e5ee56ac-0498-48db-bf2c-76cd7893e646" />
-
-
-- Keys and Help Panel:
-
-  <img width="3206" height="2482" alt="ScreenShot-2025-11-10-152649@2x" src="https://github.com/user-attachments/assets/48a0d2b3-5795-4e46-80a5-6b46c0ac65bc" />
-
-  <!--<img width="2498" height="1828" alt="ScreenShot-2025-09-16-172451@2x" src="https://github.com/user-attachments/assets/d521d137-1135-4503-bcc0-2b9dba35d252" />-->
-  
-- Command palette:
-
-  <img width="3206" height="2482" alt="ScreenShot-2025-11-10-152636@2x" src="https://github.com/user-attachments/assets/7d9a8929-72b9-4403-ae73-4e5930ca4b17" />
-
-  <!--<img width="2498" height="1828" alt="ScreenShot-2025-09-16-172546@2x" src="https://github.com/user-attachments/assets/5804c99a-621a-4cce-adde-092f6d324824" />-->
-
-- theme support:
-
-  <img width="3206" height="2482" alt="ScreenShot-2025-11-10-152753" src="https://github.com/user-attachments/assets/be468113-037b-492e-bf26-e946505f3b89" />
-  <!--
-  <img width="2498" height="1828" alt="ScreenShot-2025-09-16-172702@2x" src="https://github.com/user-attachments/assets/d4009439-2ea7-49f5-9c75-5d25f7b13771" />
-  -->
+  <img width="49%" src="assets/queue-dark.png" alt="Jobs table dark" /> <img width="49%" src="assets/queue-light.png" alt="Jobs table light" />
