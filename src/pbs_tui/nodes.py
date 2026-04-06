@@ -12,12 +12,16 @@ node information consistently.
 from __future__ import annotations
 
 import re
-from typing import Iterable, Iterator, Optional
+from typing import TYPE_CHECKING, Iterable, Iterator, Optional
+
+if TYPE_CHECKING:
+    from .data import Job
 
 __all__ = [
     "split_node_spec",
     "normalize_node_tokens",
     "extract_nodes",
+    "job_node_summary",
     "extract_exec_host_nodes",
     "extract_requested_nodes",
     "parse_node_count_spec",
@@ -157,3 +161,30 @@ def parse_node_count_spec(spec: Optional[str]) -> Optional[int]:
         elif "[" in part:
             total += len(candidates)
     return total or None
+
+
+def job_node_summary(job: "Job") -> tuple[Optional[int], Optional[str]]:
+    """Return a heuristic ``(node_count, first_node)`` tuple for *job*.
+
+    The summary prefers concrete execution host assignments before falling back
+    to requested node specifications and resource metadata published with the
+    job.
+    """
+    if exec_nodes := extract_exec_host_nodes(job.exec_host):
+        first_exec = next(
+            (node for node in exec_nodes if not node.isdigit()), exec_nodes[0]
+        )
+        return len(exec_nodes), first_exec
+
+    first_node = first_requested_node(job.nodes)
+
+    if (count := parse_node_count_spec(job.nodes)) is not None:
+        return count, first_node
+
+    if requested_nodes := extract_requested_nodes(job.nodes):
+        return len(requested_nodes), first_node
+
+    for key in ("select", "nodes", "nodect"):
+        if (count := parse_node_count_spec(job.resources_requested.get(key))) is not None:
+            return count, first_node
+    return None, None

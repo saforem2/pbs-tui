@@ -189,6 +189,26 @@ def test_detail_toggle_binding_exposed():
     )
 
 
+def test_cluster_focus_binding_exposed():
+    assert any(
+        binding[1] == "focus_cluster" and binding[0] == "g"
+        for binding in PBSTUI.BINDINGS
+    )
+
+
+def test_format_job_table_cells_truncates_long_name():
+    long_name = "a" * 30
+    job = make_job(name=long_name)
+    cells = format_job_table_cells(job, NOW)
+    assert cells["JobName"] == "a" * 20 + "\u2026"
+
+
+def test_format_job_table_cells_preserves_short_name():
+    job = make_job(name="short")
+    cells = format_job_table_cells(job, NOW)
+    assert cells["JobName"] == "short"
+
+
 # def test_run_inline_displays_sample_job_data(monkeypatch, capsys):
 #     out, err = _inline_output(monkeypatch, capsys)
 #     assert "PBS Jobs as of" in out

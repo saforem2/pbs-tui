@@ -40,12 +40,8 @@ except Exception:  # pragma: no cover - defensive fallback for older installs
 
 from .data import Job, Node, Queue, SchedulerSnapshot
 from .fetcher import PBSDataFetcher
-from .nodes import (
-    extract_exec_host_nodes,
-    extract_requested_nodes,
-    first_requested_node,
-    parse_node_count_spec,
-)
+from .nodes import job_node_summary
+from .time_utils import parse_duration_spec
 from .cluster_grid import ClusterGridWidget
 from .ui_config import JOB_TABLE_COLUMNS
 
@@ -103,9 +99,9 @@ if HAS_TEXTUAL_THEME_SUPPORT:
         dark=False,
     )
 
-    # ANSI-based themes: map Textual colors to the terminal's 16-color palette.
-    # These inherit whatever the user's terminal colorscheme defines for
-    # color0-color15, so the app blends naturally with their setup.
+    # ANSI-inspired themes: use fixed hex colors chosen to resemble a
+    # terminal-style palette, but they do not inherit the user's configured
+    # color0-color15 values.
     ANSI_DARK_THEME = _TextualTheme(
         "ansi-dark",
         primary="#5F87AF",     # ANSI 67  — muted blue
@@ -202,44 +198,7 @@ def _truncate_job_id(job_id: str) -> str:
     return head
 
 
-def _parse_duration_spec(value: Optional[str]) -> Optional[timedelta]:
-    if value is None:
-        return None
-    spec = value.strip()
-    if not spec:
-        return None
-    days = 0
-    time_part = spec
-    if "-" in spec:
-        day_part, remainder = spec.split("-", 1)
-        try:
-            days = int(day_part)
-        except ValueError:
-            return None
-        if days < 0:
-            return None
-        time_part = remainder
-    parts = time_part.split(":")
-    try:
-        units = [int(part) for part in parts]
-    except ValueError:
-        return None
-    if len(units) > 4:
-        return None
-    if any(unit < 0 for unit in units):
-        return None
-    if len(units) == 4:
-        days += units[0]
-        hours, minutes, seconds = units[1:]
-    elif len(units) == 3:
-        hours, minutes, seconds = units
-    elif len(units) == 2:
-        hours, minutes, seconds = 0, units[0], units[1]
-    elif len(units) == 1:
-        hours, minutes, seconds = 0, 0, units[0]
-    else:
-        return None
-    return timedelta(days=days, hours=hours, minutes=minutes, seconds=seconds)
+_parse_duration_spec = parse_duration_spec
 
 
 def _normalize_datetimes_for_delta(
@@ -288,31 +247,6 @@ def _job_time_remaining(
         return walltime
     remaining = walltime - runtime
     return timedelta(seconds=0) if remaining.total_seconds() < 0 else remaining
-def job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
-    """Return a heuristic ``(node_count, first_node)`` tuple for *job*.
-
-    The summary prefers concrete execution host assignments before falling back
-    to requested node specifications and resource metadata published with the
-    job.  This keeps UI code focused on presentation while centralising the
-    parsing heuristics in :mod:`pbs_tui.nodes`.
-    """
-
-    if exec_nodes := extract_exec_host_nodes(job.exec_host):
-        first_exec = next((node for node in exec_nodes if not node.isdigit()), exec_nodes[0])
-        return len(exec_nodes), first_exec
-
-    first_node = first_requested_node(job.nodes)
-
-    if (count := parse_node_count_spec(job.nodes)) is not None:
-        return count, first_node
-
-    if requested_nodes := extract_requested_nodes(job.nodes):
-        return len(requested_nodes), first_node
-
-    for key in ("select", "nodes", "nodect"):
-        if (count := parse_node_count_spec(job.resources_requested.get(key))) is not None:
-            return count, first_node
-    return None, None
 
 
 def format_job_table_cells(job: Job, reference_time: datetime) -> dict[str, Optional[str]]:
@@ -557,6 +491,7 @@ This dashboard provides a quick overview of the PBS scheduler state.
 
 - **q**: Quit the application
 - **r**: Refresh scheduler data
+- **g**: Focus the Cluster tab
 - **j**: Focus the Jobs tab
 - **n**: Focus the Nodes tab
 - **u**: Focus the Queues tab
@@ -688,8 +623,6 @@ class PBSTUI(App[None]):
             with Vertical(id="left_panel"):
                 yield SummaryWidget(id="summary")
                 with TabbedContent(id="tabs"):
-                    with TabPane("Cluster", id="cluster_tab"):
-                        yield ClusterGridWidget(id="cluster_grid")
                     with TabPane("Jobs", id="jobs_tab"):
                         with Vertical(id="jobs_tab_content"):
                             yield Input(
@@ -697,6 +630,8 @@ class PBSTUI(App[None]):
                                 id="jobs_filter",
                             )
                             yield JobsTable(id="jobs_table")
+                    with TabPane("Cluster", id="cluster_tab"):
+                        yield ClusterGridWidget(id="cluster_grid")
                     with TabPane("Nodes", id="nodes_tab"):
                         yield NodesTable(id="nodes_table")
                     with TabPane("Queues", id="queues_tab"):
@@ -800,8 +735,9 @@ class PBSTUI(App[None]):
         await self.refresh_data()
 
     def action_focus_cluster(self) -> None:
-        self.query_one(TabbedContent).active = "cluster_tab"
-        self.query_one(ClusterGridWidget).focus()
+        tabbed_content = self.query_one(TabbedContent)
+        tabbed_content.active = "cluster_tab"
+        tabbed_content.focus()
 
     def action_focus_jobs(self) -> None:
         self.query_one(TabbedContent).active = "jobs_tab"
