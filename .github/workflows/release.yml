@@ -20,7 +20,7 @@ concurrency:
 jobs:
   release-and-publish:
     if: >-
-      (github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore: release v')) ||
+      (github.event_name == 'push') ||
       (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
     runs-on: ubuntu-latest
     environment:
