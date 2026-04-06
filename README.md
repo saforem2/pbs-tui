@@ -8,25 +8,33 @@ The dashboard surfaces job,
 queue, and node activity in a single view and refreshes itself automatically so operators can
 track workload health in real time.
 
-<p align="center">
-<img width="49%" src="assets/cluster-dark.png" alt="Cluster grid (dark)" />
-<img width="49%" src="assets/jobs-dark.png" alt="Jobs table (dark)" />
-</p>
+<table>
+<tr>
+<th>Cluster Grid</th>
+<th>Jobs Table</th>
+</tr>
+<tr>
+<td><img src="assets/cluster-dark.png" alt="Cluster grid (dark)" /></td>
+<td><img src="assets/jobs-dark.png" alt="Jobs table (dark)" /></td>
+</tr>
+<tr>
+<td><img src="assets/cluster-light.png" alt="Cluster grid (light)" /></td>
+<td><img src="assets/jobs-light.png" alt="Jobs table (light)" /></td>
+</tr>
+</table>
 
-
-<details><summary>Light theme</summary>
-<p align="center">
-<img width="49%" src="assets/cluster-light.png" alt="Cluster grid (light)" />
-<img width="49%" src="assets/jobs-light.png" alt="Jobs table (light)" />
-</p>
+<details><summary>More themes</summary>
+<table>
+<tr>
+<th>Catppuccin</th>
+<th>One Dark</th>
+</tr>
+<tr>
+<td><img src="assets/cluster-catppuccin.png" alt="Cluster grid (catppuccin)" /></td>
+<td><img src="assets/cluster-onedark.png" alt="Cluster grid (onedark)" /></td>
+</tr>
+</table>
 </details>
-
-
-<!--
-<center>
-<img width="48%" alt="ScreenShot-2025-09-16-172415@2x" src="https://github.com/user-attachments/assets/0947b9f3-3b55-42b9-8a6d-8e301492b7f7" /> <img width="48%" alt="ScreenShot-2025-09-16-172702@2x" src="https://github.com/user-attachments/assets/c3a5a8c4-3e28-4ec3-b4e4-91438f745ced" />
-</center>
--->
 
 
 - Try it out!
@@ -150,12 +158,3 @@ attributes.
 - When both PBS utilities are unavailable and the fallback is disabled, the UI will show an empty
   dashboard with an error message in the status bar.
 
-## Screenshots
-
-- Cluster grid (dark / light):
-
-  <img width="49%" src="assets/topology-dark.png" alt="Cluster grid dark" /> <img width="49%" src="assets/topology-light.png" alt="Cluster grid light" />
-
-- Jobs table with detail panel (dark / light):
-
-  <img width="49%" src="assets/queue-dark.png" alt="Jobs table dark" /> <img width="49%" src="assets/queue-light.png" alt="Jobs table light" />
