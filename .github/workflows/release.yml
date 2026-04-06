@@ -246,15 +246,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # --- Publish steps (tag push only) ---
-      # The PR-merge path above creates and pushes a tag, which triggers
-      # a separate tag-push run that handles the actual publish.  This
-      # avoids double-publishing.
+      # --- Publish steps ---
+      # On PR merge: build and publish after the release commit.
+      # On manual tag push: build and publish directly.
+      # Note: tags pushed by GITHUB_TOKEN don't re-trigger workflows,
+      # so the PR-merge path must publish in the same run.
+
+      - name: Set publish flag
+        if: >-
+          (env.IS_RELEASE == 'true' && steps.bump_level.outputs.skip_release != 'true') ||
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
+        run: echo "SHOULD_PUBLISH=true" >> "$GITHUB_ENV"
 
       - name: Build package
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: env.SHOULD_PUBLISH == 'true'
         run: uv build
 
       - name: Publish to PyPI
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: env.SHOULD_PUBLISH == 'true'
         run: uv publish
