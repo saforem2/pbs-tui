@@ -1,52 +1,260 @@
-name: Publish Python 🐍 distribution 📦 to PyPI
+name: Release & Publish
 
-on: push
+on:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: read
+  id-token: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  build:
-    name: Build distribution 📦
-    runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        persist-credentials: false
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.x"
-    - name: Install pypa/build
-      run: >-
-        python3 -m
-        pip install
-        build
-        --user
-    - name: Build a binary wheel and a source tarball
-      run: python3 -m build
-    - name: Store the distribution packages
-      uses: actions/upload-artifact@v4
-      with:
-        name: python-package-distributions
-        path: dist/
-
-  publish-to-pypi:
-    name: >-
-      Publish Python 🐍 distribution 📦 to PyPI
-    if: startsWith(github.ref, 'refs/tags/')  # only publish to PyPI on tag pushes
-    needs:
-    - build
+  release-and-publish:
+    if: >-
+      (github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore: release v')) ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/p/pbs-tui  # Replace <package-name> with your PyPI project name
-    permissions:
-      id-token: write  # IMPORTANT: mandatory for trusted publishing
-
+      url: https://pypi.org/p/pbs-tui
+    env:
+      VERSION_BUMP: patch
+      IS_RELEASE: ${{ github.event_name == 'pull_request' }}
     steps:
-    - name: Download all the dists
-      uses: actions/download-artifact@v4
-      with:
-        name: python-package-distributions
-        path: dist/
-    - name: Publish distribution 📦 to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Set up Python
+        run: uv python install
+
+      # --- Release steps (PR merge only) ---
+
+      - name: Determine bump level
+        id: bump_level
+        if: env.IS_RELEASE == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          bump="${VERSION_BUMP:-patch}"
+
+          labels="$(uv run python - <<'PY'
+          import json, os
+
+          path = os.environ.get("GITHUB_EVENT_PATH", "")
+          event = {}
+          if path:
+              with open(path, "r", encoding="utf-8") as fh:
+                  event = json.load(fh)
+
+          pr = event.get("pull_request", {}) or {}
+          labels = pr.get("labels", []) or []
+          names = [ (l.get("name","") or "").strip().lower() for l in labels ]
+          print(",".join([n for n in names if n]))
+          PY
+          )"
+
+          echo "PR labels: ${labels:-<none>}"
+
+          # Skip labels
+          if [[ ",${labels}," == *",release:skip,"* ]] || \
+            [[ ",${labels}," == *",skip-release,"* ]] || \
+            [[ ",${labels}," == *",no-release,"* ]] || \
+            [[ ",${labels}," == *",skip-version-bump,"* ]]; then
+            echo "Release/version bump skipped due to label."
+            echo "skip_release=true" >> "$GITHUB_OUTPUT"
+            echo "bump=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Bump labels (last one wins if multiple)
+          if [[ ",${labels}," == *",release:major,"* ]] || [[ ",${labels}," == *",semver:major,"* ]]; then
+            bump="major"
+          fi
+          if [[ ",${labels}," == *",release:minor,"* ]] || [[ ",${labels}," == *",semver:minor,"* ]]; then
+            bump="minor"
+          fi
+          if [[ ",${labels}," == *",release:patch,"* ]] || [[ ",${labels}," == *",semver:patch,"* ]]; then
+            bump="patch"
+          fi
+
+          echo "Using bump level: ${bump}"
+          echo "skip_release=false" >> "$GITHUB_OUTPUT"
+          echo "bump=${bump}" >> "$GITHUB_OUTPUT"
+
+      - name: Bump version
+        id: bump
+        if: env.IS_RELEASE == 'true' && steps.bump_level.outputs.skip_release != 'true'
+        run: |
+          set -euo pipefail
+          old_version="$(uv run python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          bump="${{ steps.bump_level.outputs.bump }}"
+          echo "Bumping version (${bump}) from ${old_version}"
+
+          IFS='.' read -r major minor patch <<< "${old_version}"
+          case "${bump}" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          new_version="${major}.${minor}.${patch}"
+
+          export OLD_VERSION="${old_version}" NEW_VERSION="${new_version}"
+          uv run python - <<'PY'
+          import os
+          import pathlib
+          import re
+
+          old_version = os.environ["OLD_VERSION"]
+          new_version = os.environ["NEW_VERSION"]
+
+          pyproject = pathlib.Path("pyproject.toml")
+          text = pyproject.read_text(encoding="utf-8")
+
+          # Find the [project] section
+          project_match = re.search(r'(?m)^\[project\]\s*$', text)
+          if not project_match:
+              raise SystemExit("No [project] section found in pyproject.toml")
+
+          section_start = project_match.end()
+          next_section_match = re.search(r'(?m)^\[[^]]+\]\s*$', text[section_start:])
+          section_end = section_start + next_section_match.start() if next_section_match else len(text)
+
+          project_block = text[section_start:section_end]
+
+          # Replace the first version key in [project], tolerant of whitespace
+          version_pattern = re.compile(r'(?m)^(version\s*=\s*")[^"]+(".*)')
+          new_project_block, count = version_pattern.subn(rf'\g<1>{new_version}\2', project_block, count=1)
+
+          if count == 0:
+              raise SystemExit("No version key found in [project] section of pyproject.toml")
+
+          new_text = text[:section_start] + new_project_block + text[section_end:]
+          pyproject.write_text(new_text, encoding="utf-8")
+          PY
+
+          echo "NEW_VERSION=${new_version}" >> "$GITHUB_ENV"
+          echo "new_version=${new_version}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog entry
+        id: changelog
+        if: env.IS_RELEASE == 'true' && steps.bump_level.outputs.skip_release != 'true'
+        env:
+          NEW_VERSION: ${{ steps.bump.outputs.new_version }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          PREV_TAG=$(git describe --tags --abbrev=0 --match "v*" 2>/dev/null || true)
+          export PREV_TAG
+          uv run python - <<'PY'
+          import datetime
+          import os
+          import subprocess
+          from pathlib import Path
+
+          new_version = os.environ["NEW_VERSION"]
+          repo = os.environ["REPO"]
+          prev_tag = os.environ.get("PREV_TAG") or ""
+
+          log_range = "HEAD" if not prev_tag else f"{prev_tag}..HEAD"
+          SEP = "\x1f"  # unit separator — safe delimiter
+          raw_commits = subprocess.run(
+              ["git", "log", f"--pretty=format:%s{SEP}%H", log_range],
+              check=True,
+              text=True,
+              capture_output=True,
+          ).stdout.strip().splitlines()
+
+          commits = []
+          for line in raw_commits:
+              if SEP not in line:
+                  continue
+              subject, commit = line.split(SEP, 1)
+              commits.append(f"- {subject} [`{commit[:7]}`](https://github.com/{repo}/commit/{commit})")
+
+          if not commits:
+              commits.append("- No notable changes recorded.")
+
+          released_on = datetime.datetime.utcnow().strftime("%-d %B %Y")
+
+          tag = f"v{new_version}"
+          entry = (
+              f"#### [{tag}](https://github.com/{repo}/releases/tag/{tag})\n\n"
+              f"> {released_on}\n\n"
+              + "\n".join(commits)
+              + "\n\n"
+          )
+
+          changelog = Path("CHANGELOG.md")
+          content = changelog.read_text().splitlines()
+          insert_at = len(content)
+          for idx, line in enumerate(content):
+              if line.startswith("Generated by"):
+                  insert_at = idx + 1
+                  while insert_at < len(content) and content[insert_at].strip() == "":
+                      insert_at += 1
+                  break
+
+          new_content = content[:insert_at] + ["", entry.rstrip(), ""] + content[insert_at:]
+          changelog.write_text("\n".join(new_content).rstrip() + "\n")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write("body<<EOF\n")
+              fh.write(entry)
+              fh.write("\nEOF\n")
+          PY
+
+      - name: Commit, tag, and push release
+        if: env.IS_RELEASE == 'true' && steps.bump_level.outputs.skip_release != 'true'
+        env:
+          NEW_VERSION: ${{ steps.bump.outputs.new_version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml CHANGELOG.md
+          git commit -m "chore: release v${NEW_VERSION}"
+          # Rebase onto latest main BEFORE tagging so the tag
+          # always points at the commit that lands on main.
+          git fetch origin main
+          git rebase origin/main
+          git tag "v${NEW_VERSION}"
+          git push origin HEAD:main
+          git push origin "refs/tags/v${NEW_VERSION}"
+
+      - name: Publish GitHub release
+        if: env.IS_RELEASE == 'true' && steps.bump_level.outputs.skip_release != 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.bump.outputs.new_version }}
+          name: v${{ steps.bump.outputs.new_version }}
+          body: ${{ steps.changelog.outputs.body }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # --- Publish steps (tag push only) ---
+      # The PR-merge path above creates and pushes a tag, which triggers
+      # a separate tag-push run that handles the actual publish.  This
+      # avoids double-publishing.
+
+      - name: Build package
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        run: uv build
+
+      - name: Publish to PyPI
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        run: uv publish
