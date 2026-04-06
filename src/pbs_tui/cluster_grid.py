@@ -37,9 +37,17 @@ _FALLBACK_SEEDS = [
 _ANSI_THEME_NAMES = frozenset({"ansi-dark", "ansi-light"})
 
 
+def _strip_alpha(h: str) -> str:
+    """Normalise a hex colour to 6-digit RGB, stripping any alpha channel."""
+    bare = h.lstrip("#")
+    if len(bare) == 8:
+        bare = bare[:6]
+    return f"#{bare}"
+
+
 def _hex_to_rgb(h: str) -> Tuple[int, int, int]:
-    h = h.lstrip("#")
-    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    bare = h.lstrip("#")[:6]
+    return int(bare[0:2], 16), int(bare[2:4], 16), int(bare[4:6], 16)
 
 
 def _rgb_to_hex(r: int, g: int, b: int) -> str:
@@ -124,16 +132,16 @@ def _build_palette(
     For other themes: generates unique hex colours from the theme seed colours,
     sized to match the number of running jobs.
     """
-    surface = theme_vars.get("surface", "#141B2D").strip()
+    surface = _strip_alpha(theme_vars.get("surface", "#141B2D").strip())
     if not surface.startswith("#"):
         surface = "#141B2D"
 
-    # Resolve seed colours from theme variables
+    # Resolve seed colours from theme variables (strip alpha channels)
     seeds: List[str] = []
     for key in _THEME_SEED_KEYS:
         val = theme_vars.get(key, "").strip()
         if val and val.startswith("#"):
-            seeds.append(val)
+            seeds.append(_strip_alpha(val))
     if not seeds:
         seeds = list(_FALLBACK_SEEDS)
 
