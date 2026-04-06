@@ -121,9 +121,9 @@ def test_palette_agg_style_deterministic():
     assert style1 == style2
     # Different name should (usually) differ
     style3 = pal.agg_style("preemptable")
-    # At minimum, both should be valid styles
-    assert style1.startswith("on ")
-    assert style3.startswith("on ")
+    # At minimum, both should contain a background color
+    assert "on " in style1
+    assert "on " in style3
 
 
 # ── sample snapshot produces a valid grid ─────────────────────────────

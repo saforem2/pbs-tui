@@ -63,6 +63,15 @@ def _darken(hex_color: str, factor: float = 0.35) -> str:
     return _rgb_to_hex(int(r2 * 255), int(g2 * 255), int(b2 * 255))
 
 
+def _lighten(hex_color: str, factor: float = 0.2) -> str:
+    """Return a lighter variant of *hex_color*."""
+    r, g, b = _hex_to_rgb(hex_color)
+    h, l, s = colorsys.rgb_to_hls(r / 255, g / 255, b / 255)
+    l = min(1.0, l + factor)
+    r2, g2, b2 = colorsys.hls_to_rgb(h, l, s)
+    return _rgb_to_hex(int(r2 * 255), int(g2 * 255), int(b2 * 255))
+
+
 def _desaturate(hex_color: str, factor: float = 0.5) -> str:
     """Return a muted/desaturated variant of *hex_color*."""
     r, g, b = _hex_to_rgb(hex_color)
@@ -156,10 +165,14 @@ def _build_palette(
         hex_colors = _generate_job_colors(seeds, n)
         job_styles = [f"on {c}" for c in hex_colors]
 
+    empty_bg = _darken(surface, 0.05)
+    # Foreground for textured empty cells — slightly lighter than background
+    empty_fg = _lighten(empty_bg, 0.08)
+
     return Palette(
         job_styles=job_styles,
         agg_colors=agg_colors,
-        empty_style=f"on {_darken(surface, 0.05)}",
+        empty_style=f"{empty_fg} on {empty_bg}",
     )
 
 
@@ -184,7 +197,9 @@ class Palette:
     def agg_style(self, queue_name: str) -> str:
         """Return a deterministic style for an aggregated queue."""
         i = int(hashlib.md5(queue_name.encode()).hexdigest(), 16) % len(self.agg_colors)
-        return f"on {self.agg_colors[i]}"
+        bg = self.agg_colors[i]
+        fg = _lighten(bg, 0.15)
+        return f"{fg} on {bg}"
 
 # Queues whose running jobs are always merged into a single coloured block
 AGGREGATED_QUEUES = frozenset(
