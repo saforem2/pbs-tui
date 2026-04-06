@@ -20,7 +20,7 @@ concurrency:
 jobs:
   release-and-publish:
     if: >-
-      (github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore: release v')) ||
+      (github.event_name == 'push') ||
       (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
     runs-on: ubuntu-latest
     environment:
@@ -246,15 +246,20 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # --- Publish steps (tag push only) ---
-      # The PR-merge path above creates and pushes a tag, which triggers
-      # a separate tag-push run that handles the actual publish.  This
-      # avoids double-publishing.
+      # --- Publish steps ---
+      # On PR merge: build and publish after the release commit.
+      # On manual tag push: build and publish directly.
+      # Note: tags pushed by GITHUB_TOKEN don't re-trigger workflows,
+      # so the PR-merge path must publish in the same run.
 
       - name: Build package
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: >-
+          (env.IS_RELEASE == 'true' && steps.bump_level.outputs.skip_release != 'true') ||
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
         run: uv build
 
       - name: Publish to PyPI
-        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+        if: >-
+          (env.IS_RELEASE == 'true' && steps.bump_level.outputs.skip_release != 'true') ||
+          (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v'))
         run: uv publish
