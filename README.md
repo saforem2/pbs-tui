@@ -9,14 +9,15 @@ queue, and node activity in a single view and refreshes itself automatically so 
 track workload health in real time.
 
 <p align="center">
-<img width="49%" src="assets/topology-dark.png" alt="Cluster grid (dark)" />
-<img width="49%" src="assets/queue-dark.png" alt="Jobs table (dark)" />
+<img width="49%" src="assets/cluster-dark.png" alt="Cluster grid (dark)" />
+<img width="49%" src="assets/jobs-dark.png" alt="Jobs table (dark)" />
 </p>
+
 
 <details><summary>Light theme</summary>
 <p align="center">
-<img width="49%" src="assets/topology-light.png" alt="Cluster grid (light)" />
-<img width="49%" src="assets/queue-light.png" alt="Jobs table (light)" />
+<img width="49%" src="assets/cluster-light.png" alt="Cluster grid (light)" />
+<img width="49%" src="assets/jobs-light.png" alt="Jobs table (light)" />
 </p>
 </details>
 
