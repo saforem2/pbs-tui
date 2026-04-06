@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 import textwrap
 from datetime import datetime, timezone
 
@@ -263,3 +264,15 @@ def test_parse_queues_json_extracts_fields():
     assert queue.started is True
     assert queue.job_states == {"Q": 3, "R": 1}
     assert queue.resources_default["walltime"] == "04:00:00"
+
+
+def test_run_command_handles_non_utf8_output():
+    """_run_command should not raise on non-UTF-8 subprocess output."""
+    fetcher = PBSDataFetcher(force_sample=True)
+    # Emit bytes 0x80-0x83 which are invalid in UTF-8
+    cmd = [sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'\\x80\\x81\\x82\\x83')"]
+    stdout, error = asyncio.run(fetcher._run_command(cmd))
+    assert error is None
+    assert stdout is not None
+    # The replacement character should appear instead of the invalid bytes
+    assert "\ufffd" in stdout

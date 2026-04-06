@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import importlib
+import logging
 import os
 import sys
 from collections import Counter
@@ -39,13 +40,12 @@ except Exception:  # pragma: no cover - defensive fallback for older installs
 
 from .data import Job, Node, Queue, SchedulerSnapshot
 from .fetcher import PBSDataFetcher
-from .nodes import (
-    extract_exec_host_nodes,
-    extract_requested_nodes,
-    first_requested_node,
-    parse_node_count_spec,
-)
+from .nodes import job_node_summary
+from .time_utils import parse_duration_spec
+from .cluster_grid import ClusterGridWidget
 from .ui_config import JOB_TABLE_COLUMNS
+
+_LOGGER = logging.getLogger(__name__)
 
 
 _TEXTUAL_APP_MODULE = importlib.import_module("textual.app")
@@ -98,9 +98,46 @@ if HAS_TEXTUAL_THEME_SUPPORT:
         boost="#4338CA",
         dark=False,
     )
+
+    # ANSI-inspired themes: use fixed hex colors chosen to resemble a
+    # terminal-style palette, but they do not inherit the user's configured
+    # color0-color15 values.
+    ANSI_DARK_THEME = _TextualTheme(
+        "ansi-dark",
+        primary="#5F87AF",     # ANSI 67  — muted blue
+        secondary="#5FAFAF",   # ANSI 73  — teal
+        warning="#D7AF5F",     # ANSI 179 — amber
+        error="#AF5F5F",       # ANSI 131 — muted red
+        success="#5FAF5F",     # ANSI 71  — green
+        accent="#AF87D7",      # ANSI 140 — lavender
+        foreground="#C0C0C0",  # ANSI 7   — silver (light gray)
+        background="#1C1C1C",  # ANSI 234 — near-black
+        surface="#262626",     # ANSI 235 — dark gray
+        panel="#262626",
+        boost="#D787AF",       # ANSI 175 — pink
+        dark=True,
+    )
+
+    ANSI_LIGHT_THEME = _TextualTheme(
+        "ansi-light",
+        primary="#005FAF",     # ANSI 25  — dark blue
+        secondary="#008787",   # ANSI 30  — dark teal
+        warning="#AF8700",     # ANSI 136 — dark amber
+        error="#AF0000",       # ANSI 124 — dark red
+        success="#008700",     # ANSI 28  — dark green
+        accent="#5F00AF",      # ANSI 55  — purple
+        foreground="#303030",  # ANSI 236 — dark gray
+        background="#EEEEEE",  # ANSI 255 — near-white
+        surface="#FFFFFF",     # white
+        panel="#FFFFFF",
+        boost="#870087",       # ANSI 90  — dark magenta
+        dark=False,
+    )
 else:  # pragma: no cover - legacy Textual without Theme helper
     PBS_DARK_THEME = None
     PBS_LIGHT_THEME = None
+    ANSI_DARK_THEME = None
+    ANSI_LIGHT_THEME = None
 
 
 
@@ -161,44 +198,7 @@ def _truncate_job_id(job_id: str) -> str:
     return head
 
 
-def _parse_duration_spec(value: Optional[str]) -> Optional[timedelta]:
-    if value is None:
-        return None
-    spec = value.strip()
-    if not spec:
-        return None
-    days = 0
-    time_part = spec
-    if "-" in spec:
-        day_part, remainder = spec.split("-", 1)
-        try:
-            days = int(day_part)
-        except ValueError:
-            return None
-        if days < 0:
-            return None
-        time_part = remainder
-    parts = time_part.split(":")
-    try:
-        units = [int(part) for part in parts]
-    except ValueError:
-        return None
-    if len(units) > 4:
-        return None
-    if any(unit < 0 for unit in units):
-        return None
-    if len(units) == 4:
-        days += units[0]
-        hours, minutes, seconds = units[1:]
-    elif len(units) == 3:
-        hours, minutes, seconds = units
-    elif len(units) == 2:
-        hours, minutes, seconds = 0, units[0], units[1]
-    elif len(units) == 1:
-        hours, minutes, seconds = 0, 0, units[0]
-    else:
-        return None
-    return timedelta(days=days, hours=hours, minutes=minutes, seconds=seconds)
+_parse_duration_spec = parse_duration_spec
 
 
 def _normalize_datetimes_for_delta(
@@ -247,31 +247,6 @@ def _job_time_remaining(
         return walltime
     remaining = walltime - runtime
     return timedelta(seconds=0) if remaining.total_seconds() < 0 else remaining
-def job_node_summary(job: Job) -> tuple[Optional[int], Optional[str]]:
-    """Return a heuristic ``(node_count, first_node)`` tuple for *job*.
-
-    The summary prefers concrete execution host assignments before falling back
-    to requested node specifications and resource metadata published with the
-    job.  This keeps UI code focused on presentation while centralising the
-    parsing heuristics in :mod:`pbs_tui.nodes`.
-    """
-
-    if exec_nodes := extract_exec_host_nodes(job.exec_host):
-        first_exec = next((node for node in exec_nodes if not node.isdigit()), exec_nodes[0])
-        return len(exec_nodes), first_exec
-
-    first_node = first_requested_node(job.nodes)
-
-    if (count := parse_node_count_spec(job.nodes)) is not None:
-        return count, first_node
-
-    if requested_nodes := extract_requested_nodes(job.nodes):
-        return len(requested_nodes), first_node
-
-    for key in ("select", "nodes", "nodect"):
-        if (count := parse_node_count_spec(job.resources_requested.get(key))) is not None:
-            return count, first_node
-    return None, None
 
 
 def format_job_table_cells(job: Job, reference_time: datetime) -> dict[str, Optional[str]]:
@@ -292,7 +267,7 @@ def format_job_table_cells(job: Job, reference_time: datetime) -> dict[str, Opti
         "#JobId": _truncate_job_id(job.id),
         "User": job.user,
         "Account": job.account,
-        "JobName": job.name,
+        "JobName": (job.name[:20] + "…") if job.name and len(job.name) > 20 else job.name,
         "WallTime": job.walltime,
         "QueuedTime": _format_duration(queued_duration),
         "EstStart": _format_datetime(est_start),
@@ -313,53 +288,27 @@ class SummaryWidget(Static):
     def update_from_snapshot(self, snapshot: SchedulerSnapshot) -> None:
         job_counts = Counter(job.state for job in snapshot.jobs if job.state)
         node_counts = Counter(node.primary_state() for node in snapshot.nodes)
-        queue_enabled = sum(1 for queue in snapshot.queues if queue.enabled)
-        queue_started = sum(1 for queue in snapshot.queues if queue.started)
-        total_queues = len(snapshot.queues)
 
-        job_table = Table.grid(padding=(0, 1))
-        job_table.add_column(justify="left")
-        job_table.add_row(Text(f"Total: {len(snapshot.jobs)}", style="bold"))
+        line = Text()
+        # Jobs
+        line.append("Jobs ", style="bold cyan")
+        line.append(f"{len(snapshot.jobs)}", style="bold")
         if job_counts:
-            for state, count in sorted(job_counts.items()):
-                label = JOB_STATE_LABELS.get(state, state)
-                job_table.add_row(f"{label}: {count}")
-        else:
-            job_table.add_row("No jobs")
-
-        node_table = Table.grid(padding=(0, 1))
-        node_table.add_column(justify="left")
-        node_table.add_row(Text(f"Total: {len(snapshot.nodes)}", style="bold"))
+            parts = [f"{JOB_STATE_LABELS.get(s, s)[0]}:{c}" for s, c in sorted(job_counts.items())]
+            line.append(f" ({', '.join(parts)})", style="dim")
+        # Nodes
+        line.append("    Nodes ", style="bold green")
+        line.append(f"{len(snapshot.nodes)}", style="bold")
         if node_counts:
-            for state, count in sorted(node_counts.items()):
-                node_table.add_row(f"{state}: {count}")
-        else:
-            node_table.add_row("No nodes")
+            parts = [f"{s}:{c}" for s, c in sorted(node_counts.items())]
+            line.append(f" ({', '.join(parts)})", style="dim")
+        # Queues
+        total_queues = len(snapshot.queues)
+        queue_enabled = sum(1 for q in snapshot.queues if q.enabled)
+        line.append("    Queues ", style="bold magenta")
+        line.append(f"{queue_enabled}/{total_queues}", style="bold")
 
-        queue_table = Table.grid(padding=(0, 1))
-        queue_table.add_column(justify="left")
-        queue_table.add_row(Text(f"Total: {total_queues}", style="bold"))
-        queue_table.add_row(f"Enabled: {queue_enabled}")
-        queue_table.add_row(f"Started: {queue_started}")
-        queue_job_counts = Counter()
-        for queue in snapshot.queues:
-            for state, count in queue.job_states.items():
-                queue_job_counts[state] += count
-        for state_code in ("R", "Q", "H"):
-            if queue_job_counts.get(state_code):
-                label = JOB_STATE_LABELS.get(state_code, state_code)
-                queue_table.add_row(f"{label}: {queue_job_counts[state_code]}")
-
-        grid = Table.grid(expand=True)
-        grid.add_column()
-        grid.add_column()
-        grid.add_column()
-        grid.add_row(
-            Panel(job_table, title="Jobs", border_style="cyan"),
-            Panel(node_table, title="Nodes", border_style="green"),
-            Panel(queue_table, title="Queues", border_style="magenta"),
-        )
-        self.update(grid)
+        self.update(line)
 
 
 class StatusBar(Static):
@@ -542,6 +491,7 @@ This dashboard provides a quick overview of the PBS scheduler state.
 
 - **q**: Quit the application
 - **r**: Refresh scheduler data
+- **g**: Focus the Cluster tab
 - **j**: Focus the Jobs tab
 - **n**: Focus the Nodes tab
 - **u**: Focus the Queues tab
@@ -551,7 +501,8 @@ This dashboard provides a quick overview of the PBS scheduler state.
 ## Themes
 
 Use the command palette's **Change theme** action to switch between the bundled
-`pbs-dark`/`pbs-light` themes or Textual's defaults.
+`pbs-dark`/`pbs-light`/`ansi-dark`/`ansi-light` themes or Textual's defaults.
+The `ansi-*` themes use muted colors from the terminal's palette.
 
 ## Jobs table filtering
 
@@ -627,6 +578,7 @@ class PBSTUI(App[None]):
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("r", "refresh", "Refresh now"),
+        ("g", "focus_cluster", "Focus cluster"),
         ("j", "focus_jobs", "Focus jobs"),
         ("n", "focus_nodes", "Focus nodes"),
         ("u", "focus_queues", "Focus queues"),
@@ -646,6 +598,10 @@ class PBSTUI(App[None]):
         if HAS_TEXTUAL_THEME_SUPPORT and PBS_DARK_THEME and PBS_LIGHT_THEME:
             self.register_theme(PBS_DARK_THEME)
             self.register_theme(PBS_LIGHT_THEME)
+            if ANSI_DARK_THEME:
+                self.register_theme(ANSI_DARK_THEME)
+            if ANSI_LIGHT_THEME:
+                self.register_theme(ANSI_LIGHT_THEME)
             self.theme = PBS_DARK_THEME.name
         self.fetcher = fetcher or PBSDataFetcher()
         self.refresh_interval = refresh_interval
@@ -674,6 +630,8 @@ class PBSTUI(App[None]):
                                 id="jobs_filter",
                             )
                             yield JobsTable(id="jobs_table")
+                    with TabPane("Cluster", id="cluster_tab"):
+                        yield ClusterGridWidget(id="cluster_grid")
                     with TabPane("Nodes", id="nodes_tab"):
                         yield NodesTable(id="nodes_table")
                     with TabPane("Queues", id="queues_tab"):
@@ -698,7 +656,7 @@ class PBSTUI(App[None]):
         except Exception as exc:  # pragma: no cover - defensive
             message = f"Failed to refresh PBS data: {exc}"
             self.query_one(StatusBar).update_status(message, severity="error")
-            self.log.exception("Failed to refresh PBS data")
+            _LOGGER.exception("Failed to refresh PBS data")
         else:
             self._snapshot = snapshot
             self._update_tables(snapshot)
@@ -720,9 +678,11 @@ class PBSTUI(App[None]):
     def _update_tables(self, snapshot: SchedulerSnapshot) -> None:
         nodes_table = self.query_one(NodesTable)
         queues_table = self.query_one(QueuesTable)
+        cluster_grid = self.query_one(ClusterGridWidget)
         self._refresh_jobs_table()
         nodes_table.update_nodes(snapshot.nodes)
         queues_table.update_queues(snapshot.queues)
+        cluster_grid.update_from_snapshot(snapshot)
         self._job_index = {job.id: job for job in snapshot.jobs}
         self._node_index = {node.name: node for node in snapshot.nodes}
         self._queue_index = {queue.name: queue for queue in snapshot.queues}
@@ -773,6 +733,11 @@ class PBSTUI(App[None]):
 
     async def action_refresh(self) -> None:
         await self.refresh_data()
+
+    def action_focus_cluster(self) -> None:
+        tabbed_content = self.query_one(TabbedContent)
+        tabbed_content.active = "cluster_tab"
+        tabbed_content.focus()
 
     def action_focus_jobs(self) -> None:
         self.query_one(TabbedContent).active = "jobs_tab"
@@ -842,6 +807,39 @@ class PBSTUI(App[None]):
                     self.query_one(DetailPanel).show_queue(queue)
                 else:
                     self.query_one(DetailPanel).hide()
+
+    def on_cluster_grid_widget_cell_clicked(
+        self, event: ClusterGridWidget.CellClicked
+    ) -> None:
+        if self._snapshot is None or not self._detail_panel_enabled:
+            return
+        details = self.query_one(DetailPanel)
+        # Extract color from style like "on blue" or "on #b49ece"
+        color = event.color_style.replace("on ", "", 1) if event.color_style.startswith("on ") else ""
+        owner = event.owner
+        if owner.startswith("queue:"):
+            queue_name = owner[6:]
+            queue = self._queue_index.get(queue_name)
+            if queue:
+                self._selected_queue_name = queue.name
+                self._selected_job_id = None
+                self._selected_node_name = None
+                self._detail_source = "queue"
+                details.show_queue(queue)
+                if color:
+                    details.styles.border = ("tall", color)
+        else:
+            job = self._job_index.get(owner)
+            if job:
+                self._selected_job_id = job.id
+                self._selected_node_name = None
+                self._selected_queue_name = None
+                self._detail_source = "job"
+                details.show_job(
+                    job, reference_time=self._snapshot.timestamp
+                )
+                if color:
+                    details.styles.border = ("tall", color)
 
     def _update_detail_panel(self, *, reference_time: Optional[datetime] = None) -> None:
         """Refresh the detail panel based on current selection and visibility."""
