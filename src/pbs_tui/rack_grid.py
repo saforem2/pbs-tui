@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Tuple
 
 from rich.console import RenderableType
 from rich.text import Text
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, ScrollableContainer, Vertical
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Static
@@ -505,17 +505,43 @@ def render_job_list_entry(entry: JobListEntry, palette: Palette,
 # ---------------------------------------------------------------------------
 
 
-class _RackPanel(Widget):
-    """Renders the rack grid and emits clicks as messages."""
+class _RackPanel(ScrollableContainer):
+    """Renders the rack grid and emits clicks as messages.
+
+    Uses a ScrollableContainer wrapping a child Static so the rack grid can
+    extend beyond the viewport horizontally and vertically without wrapping
+    the rack rows.
+    """
 
     DEFAULT_CSS = """
     _RackPanel {
+        width: 1fr;
         height: 1fr;
         overflow-x: scroll;
-        overflow-y: auto;
+        overflow-y: scroll;
         padding: 0 1;
     }
+    _RackPanel > Static {
+        width: auto;
+        height: auto;
+    }
+    _RackPanel:focus {
+        border: tall $accent;
+    }
     """
+
+    BINDINGS = [
+        ("up", "scroll_up", "Up"),
+        ("down", "scroll_down", "Down"),
+        ("left", "scroll_left", "Left"),
+        ("right", "scroll_right", "Right"),
+        ("pageup", "page_up", "PgUp"),
+        ("pagedown", "page_down", "PgDn"),
+        ("home", "scroll_home", "Top"),
+        ("end", "scroll_end", "Bottom"),
+    ]
+
+    can_focus = True
 
     class CellClicked(Message):
         def __init__(self, node_name: Optional[str], rack_name: Optional[str]) -> None:
@@ -525,28 +551,32 @@ class _RackPanel(Widget):
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
-        self._content: RenderableType = Text()
+        self._inner = Static("", id="rack_panel_inner", expand=False)
         self._model: Optional[RenderModel] = None
 
-    def render(self) -> RenderableType:
-        return self._content
+    def compose(self):
+        yield self._inner
 
     def update(self, content: Text, model: RenderModel) -> None:
-        self._content = content
+        # no_wrap on the Text would still let Rich measure; the inner Static
+        # being width: auto makes the container respect the actual rendered
+        # width and surface horizontal scrolling.
+        content.no_wrap = True
+        content.overflow = "ignore"
+        self._inner.update(content)
         self._model = model
-        self.refresh()
 
     def on_click(self, event) -> None:
         if self._model is None:
             return
-        col = int(event.x)
-        row = int(event.y)
-        # Look for a node at the click location
+        # event.x / event.y are container-local; add scroll offsets to map
+        # back to the underlying RenderModel's absolute coordinates.
+        col = int(event.x) + int(self.scroll_offset.x)
+        row = int(event.y) + int(self.scroll_offset.y)
         node_name = self._model.cell_at(row, col)
         if node_name is not None:
             self.post_message(self.CellClicked(node_name=node_name, rack_name=None))
             return
-        # Or a rack-name label
         rack_name = self._model.rack_at(row, col)
         if rack_name is not None:
             self.post_message(self.CellClicked(node_name=None, rack_name=rack_name))
@@ -557,10 +587,14 @@ class _JobListWidget(Widget):
 
     DEFAULT_CSS = """
     _JobListWidget {
-        width: 36;
+        width: 32;
+        min-width: 32;
         height: 1fr;
         border-left: tall $surface-lighten-1;
         padding: 0 1;
+    }
+    _JobListWidget:focus {
+        border-left: tall $accent;
     }
     """
 
