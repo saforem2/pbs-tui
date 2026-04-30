@@ -242,12 +242,16 @@ def build_render_model(
 # Cell glyphs and renderer
 # ---------------------------------------------------------------------------
 
+# Cell glyphs are chosen from East-Asian-width "Neutral" or "Narrow" only —
+# "Ambiguous" glyphs like ■/□/▤ render as 2 cells wide in many terminals
+# (especially macOS Terminal with default fonts), which would clobber the
+# 2-column rack mini-grid layout.
 CELL_GLYPHS: Dict[CellState, str] = {
-    CellState.OCCUPIED: "■",   # filled square — colored per job
-    CellState.FREE: "□",       # empty square outline
-    CellState.DOWN: "▨",       # hatched — clearly distinct from job/free
+    CellState.OCCUPIED: "▮",   # BLACK VERTICAL RECTANGLE — colored per job
+    CellState.FREE: "▯",       # WHITE VERTICAL RECTANGLE — outline
+    CellState.DOWN: "x",       # ASCII x
     CellState.UNKNOWN: "?",
-    CellState.RESERVATION: "▣",  # square-with-square — reservation marker
+    CellState.RESERVATION: "%",  # ASCII percent — reservation marker
     CellState.MISSING: " ",
 }
 
@@ -371,6 +375,8 @@ class _RackLegend(Static):
 
 def build_legend_text() -> Text:
     legend = Text()
+    legend.append(CELL_GLYPHS[CellState.OCCUPIED], style="bold")
+    legend.append(" job  ")
     legend.append(CELL_GLYPHS[CellState.FREE], style="dim")
     legend.append(" free  ")
     legend.append(CELL_GLYPHS[CellState.DOWN], style="color(244)")
@@ -379,8 +385,7 @@ def build_legend_text() -> Text:
     legend.append(" unknown  ")
     legend.append(CELL_GLYPHS[CellState.RESERVATION], style="color(140)")
     legend.append(" reservation  ")
-    legend.append(CELL_GLYPHS[CellState.OCCUPIED], style="bold")
-    legend.append(" job (click to select)")
+    legend.append("(click a cell to select its job)", style="dim")
     return legend
 
 
@@ -470,7 +475,7 @@ def render_job_list_entry(entry: JobListEntry, palette: Palette,
     style = palette.job_style(entry.palette_index)
     fg = style.replace("on ", "", 1) if style.startswith("on ") else style
     text = Text()
-    text.append("■ ", style=fg)
+    text.append("▮ ", style=fg)
     label = f"{entry.user} {entry.node_count}n {entry.queue}"
     if entry.time_remaining_str:
         label += f" [{entry.time_remaining_str}]"
