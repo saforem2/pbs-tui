@@ -505,3 +505,102 @@ class _RackPanel(Widget):
         rack_name = self._model.rack_at(row, col)
         if rack_name is not None:
             self.post_message(self.CellClicked(node_name=None, rack_name=rack_name))
+
+
+class _JobListWidget(Widget):
+    """Sidebar listing running jobs; emits JobChosen on selection."""
+
+    DEFAULT_CSS = """
+    _JobListWidget {
+        width: 36;
+        height: 1fr;
+        border-left: tall $surface-lighten-1;
+        padding: 0 1;
+    }
+    """
+
+    BINDINGS = [
+        ("up", "move(-1)", "Up"),
+        ("down", "move(1)", "Down"),
+        ("enter", "choose", "Select"),
+        ("escape", "clear", "Clear"),
+    ]
+
+    can_focus = True
+
+    class JobChosen(Message):
+        def __init__(self, job_id: str) -> None:
+            super().__init__()
+            self.job_id = job_id
+
+    class FilterCleared(Message):
+        pass
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._entries: List[JobListEntry] = []
+        self._cursor: int = 0
+        self._palette: Optional[Palette] = None
+        self._selected_id: Optional[str] = None
+        self._rack_filter: Optional[str] = None
+        self._content: RenderableType = Text()
+
+    def render(self) -> RenderableType:
+        return self._content
+
+    def update(self, entries: List[JobListEntry], palette: Palette,
+               selected_id: Optional[str], rack_filter: Optional[str]) -> None:
+        self._entries = entries
+        self._palette = palette
+        self._selected_id = selected_id
+        self._rack_filter = rack_filter
+        self._cursor = max(0, min(self._cursor, len(entries) - 1))
+        self._rebuild_content()
+        self.refresh()
+
+    def _rebuild_content(self) -> None:
+        text = Text()
+        if self._rack_filter:
+            text.append("Filtered: ", style="dim")
+            text.append(self._rack_filter, style="bold")
+            text.append(f"  ({len(self._entries)} jobs)\n", style="dim")
+            text.append("[clear: esc or click chip]\n\n", style="dim")
+        if not self._entries:
+            text.append("(no running jobs)", style="dim")
+            self._content = text
+            return
+        for i, entry in enumerate(self._entries):
+            prefix = "▶ " if i == self._cursor else "  "
+            text.append(prefix)
+            text.append_text(render_job_list_entry(
+                entry, self._palette,
+                selected=(self._selected_id == entry.job_id),
+            ))
+            text.append("\n")
+        self._content = text
+
+    def action_move(self, delta: int) -> None:
+        if not self._entries:
+            return
+        self._cursor = (self._cursor + delta) % len(self._entries)
+        self._rebuild_content()
+        self.refresh()
+
+    def action_choose(self) -> None:
+        if not self._entries:
+            return
+        chosen = self._entries[self._cursor]
+        self.post_message(self.JobChosen(chosen.job_id))
+
+    def action_clear(self) -> None:
+        self.post_message(self.FilterCleared())
+
+    def on_click(self, event) -> None:
+        # Map click row to an entry index. Header takes 0-2 lines depending on filter.
+        offset = 3 if self._rack_filter else 0
+        row = int(event.y) - offset
+        if 0 <= row < len(self._entries):
+            self._cursor = row
+            self._rebuild_content()
+            self.refresh()
+            self.post_message(self.JobChosen(self._entries[row].job_id))
