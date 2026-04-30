@@ -106,9 +106,10 @@ def sample_snapshot(now: datetime | None = None) -> SchedulerSnapshot:
     for prefix, start, end in rack_ranges:
         for rack_num in range(start, end + 1):
             rack = f"{prefix}{rack_num:02d}"
-            # Each rack has 14 nodes (Polaris chassis)
-            for slot in range(14):
-                all_node_names.append(f"{rack}c0s{slot}b0n0")
+            # Polaris layout: 7 chassis slots x 2 blades = 14 nodes per rack.
+            for slot in range(7):
+                for blade in range(2):
+                    all_node_names.append(f"{rack}c0s{slot}b{blade}n0")
 
     # Trim to target size
     all_node_names = all_node_names[:561]

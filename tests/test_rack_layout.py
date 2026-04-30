@@ -115,18 +115,24 @@ def test_detect_empty_layout_returns_generic_with_no_racks():
 def test_parse_node_id_polaris():
     """Polaris hostnames look like x3005c0s7b0n0."""
     from pbs_tui.rack_layout import parse_node_id, NodeId
+    # Slot id encodes (chassis, slot, blade, node) so adjacent blades are
+    # distinguishable and sortable.
     assert parse_node_id("x3005c0s7b0n0") == NodeId(
-        rack="x3005", slot="s07", raw="x3005c0s7b0n0"
+        rack="x3005", slot="c0s07b0n0", raw="x3005c0s7b0n0"
     )
-    # Two-digit slot
+    assert parse_node_id("x3005c0s7b1n0") == NodeId(
+        rack="x3005", slot="c0s07b1n0", raw="x3005c0s7b1n0"
+    )
+    # Two-digit chassis slot
     assert parse_node_id("x3112c0s13b0n0") == NodeId(
-        rack="x3112", slot="s13", raw="x3112c0s13b0n0"
+        rack="x3112", slot="c0s13b0n0", raw="x3112c0s13b0n0"
     )
 
 
 def test_detect_polaris_layout_from_node_names():
     """A snapshot of Polaris-pattern names returns the curated polaris layout."""
-    names = [f"x3001c0s{i}b0n0" for i in range(14)]
+    # 14 nodes per rack: 7 chassis slots x 2 blades.
+    names = [f"x3001c0s{s}b{b}n0" for s in range(7) for b in range(2)]
     layout = detect_layout(names)
     assert layout.name == "polaris"
     # Three rack rows: 16 / 12 / 12
@@ -139,14 +145,21 @@ def test_detect_polaris_layout_from_node_names():
     # Display order is right-to-left within each row
     assert layout.rack_rows[0][0] == "x3016"   # leftmost is highest
     assert layout.rack_rows[0][-1] == "x3001"  # rightmost is lowest
-    # rack_slots stores full Polaris node names
-    assert layout.rack_slots["x3001"][0] == "x3001c0s0b0n0"
-    assert len(layout.rack_slots["x3001"]) == 14
+    # rack_slots is populated from the observed names, sorted by canonical
+    # slot id, so all 14 nodes appear in chassis-then-blade order.
+    assert layout.rack_slots["x3001"] == [
+        f"x3001c0s{s}b{b}n0" for s in range(7) for b in range(2)
+    ]
+    # Racks not present in the snapshot get an empty slot list — the renderer
+    # treats missing slots as MISSING cells, which is correct.
+    assert layout.rack_slots["x3016"] == []
 
 
 def test_polaris_takes_precedence_over_aurora_when_majority():
     """Mixed snapshot: Polaris majority should win even with some Aurora names."""
-    names = [f"x3001c0s{i}b0n0" for i in range(14)] + [f"x4702-b{i:02d}" for i in range(2)]
+    names = [
+        f"x3001c0s{s}b{b}n0" for s in range(7) for b in range(2)
+    ] + [f"x4702-b{i:02d}" for i in range(2)]
     layout = detect_layout(names)
     assert layout.name == "polaris"
 

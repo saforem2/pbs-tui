@@ -30,9 +30,11 @@ __all__ = [
 # Aurora node name format: "x[rack4]-b[slot2]" e.g. "x4702-b07"
 _AURORA_PATTERN = re.compile(r"^(x[34]\d{3})-(b\d{2})$")
 
-# Polaris node name format: "x[rack4]c0s[slot2]b0n0" e.g. "x3005c0s7b0n0".
-# The rack id is the leading "x[34]\d{3}" and the slot is the "s\d+" segment.
-_POLARIS_PATTERN = re.compile(r"^(x3\d{3})c0s(\d+)b\d+n\d+$")
+# Polaris node name format: "x[rack4]c[chassis]s[slot]b[blade]n[node]"
+# e.g. "x3005c0s7b0n0".  The rack id is the leading "x3\d{3}" and the position
+# within rack is captured as (chassis, slot, blade, node) so visually-adjacent
+# nodes (same slot, different blade) get distinct slot ids in our layout.
+_POLARIS_PATTERN = re.compile(r"^(x3\d{3})c(\d+)s(\d+)b(\d+)n(\d+)$")
 
 # Generic last-dash split, e.g. "nodeA-01" -> rack="nodeA", slot="01".
 _GENERIC_DASH_PATTERN = re.compile(r"^(.*)-([^-]+)$")
@@ -55,8 +57,14 @@ def parse_node_id(name: str) -> Optional[NodeId]:
         return NodeId(rack=m.group(1), slot=m.group(2), raw=name)
 
     if m := _POLARIS_PATTERN.match(name):
-        # Normalise Polaris slot to two digits so chassis ordering is stable.
-        return NodeId(rack=m.group(1), slot=f"s{int(m.group(2)):02d}", raw=name)
+        # Encode (chassis, slot, blade, node) into a single sortable slot id
+        # so that all nodes within a rack get unique ordering keys.
+        chassis, slot, blade, node = (int(g) for g in m.groups()[1:])
+        return NodeId(
+            rack=m.group(1),
+            slot=f"c{chassis}s{slot:02d}b{blade}n{node}",
+            raw=name,
+        )
 
     if m := _GENERIC_DASH_PATTERN.match(name):
         return NodeId(rack=m.group(1), slot=m.group(2), raw=name)
@@ -136,8 +144,6 @@ _AURORA_LAYOUT = _build_aurora_layout()
 # of those rows are filled with empty placeholders ("") that the renderer
 # skips for placement but reserves for spacing.
 #
-# Each Polaris rack holds 14 nodes laid out as 2 cols x 7 rows.
-_POLARIS_RACK_SHAPE = (7, 2)
 # Row 1 contains 16 racks numbered x3001..x3016, displayed right-to-left so
 # x3016 sits leftmost and x3001 sits rightmost.  Rows 2 and 3 each contain
 # 12 racks numbered x31RR / x32RR (01..12) right-aligned under row 1.
@@ -149,26 +155,49 @@ _POLARIS_ROWS = (
 _POLARIS_TOP_ROW_WIDTH = 16
 
 
-def _build_polaris_layout() -> MachineLayout:
+def _build_polaris_layout(node_names: Iterable[str]) -> MachineLayout:
+    """Build the Polaris layout, populating each rack's slot list from
+    *node_names* so the renderer sees the real hostnames.
+
+    Slots within a rack are ordered by their canonical (chassis, slot,
+    blade, node) tuple from ``parse_node_id`` so adjacent nodes stay
+    adjacent in the rendered grid.
+    """
+    # Group observed Polaris node names by rack, sorted by canonical slot id.
+    rack_to_nodes: Dict[str, List[str]] = {}
+    for name in node_names:
+        if not name:
+            continue
+        node = parse_node_id(name)
+        if node is None or not _POLARIS_PATTERN.match(name):
+            continue
+        rack_to_nodes.setdefault(node.rack, []).append(name)
+    for nodes in rack_to_nodes.values():
+        nodes.sort(key=lambda n: parse_node_id(n).slot)  # type: ignore[union-attr]
+
+    # Compute the per-rack grid shape from the largest observed rack so all
+    # racks share dimensions.  Polaris has 14 nodes/rack today, but the shape
+    # adjusts automatically if the cluster grows.
+    max_n = max((len(v) for v in rack_to_nodes.values()), default=14)
+    cols = 2
+    rows = max(1, math.ceil(max_n / cols))
+
     rack_rows: List[List[str]] = []
     rack_specs: Dict[str, RackSpec] = {}
     rack_slots: Dict[str, List[str]] = {}
-    n_slots = _POLARIS_RACK_SHAPE[0] * _POLARIS_RACK_SHAPE[1]
     for prefix, lo, hi in _POLARIS_ROWS:
-        # Right-align: pad the front with empty placeholders so the rightmost
-        # rack lines up with column (_POLARIS_TOP_ROW_WIDTH - 1).
+        # Right-align rows 2 and 3 under row 1.
         leading_blanks = _POLARIS_TOP_ROW_WIDTH - (hi - lo + 1)
         row: List[str] = [""] * leading_blanks
-        # Display order is right-to-left: highest rack number on the left,
-        # lowest on the right.
+        # Display order is right-to-left within each row.
         for n in range(hi, lo - 1, -1):
             name = f"{prefix}{n:02d}"
             row.append(name)
-            rack_specs[name] = RackSpec(
-                name=name, rows=_POLARIS_RACK_SHAPE[0], cols=_POLARIS_RACK_SHAPE[1]
-            )
-            # Polaris node names: "x3005c0s7b0n0"
-            rack_slots[name] = [f"{name}c0s{i}b0n0" for i in range(n_slots)]
+            rack_specs[name] = RackSpec(name=name, rows=rows, cols=cols)
+            # Use observed nodes if we have them, else an empty list (rack
+            # renders as all-MISSING cells, which is correct for racks the
+            # snapshot doesn't mention).
+            rack_slots[name] = rack_to_nodes.get(name, [])
         rack_rows.append(row)
     return MachineLayout(
         name="polaris",
@@ -176,9 +205,6 @@ def _build_polaris_layout() -> MachineLayout:
         rack_specs=rack_specs,
         rack_slots=rack_slots,
     )
-
-
-_POLARIS_LAYOUT = _build_polaris_layout()
 
 
 def _aurora_match_ratio(node_names: Iterable[str]) -> float:
@@ -201,7 +227,7 @@ def detect_layout(node_names: Iterable[str]) -> MachineLayout:
     """Return the best-matching :class:`MachineLayout` for *node_names*."""
     names = [n for n in node_names if n]
     if _polaris_match_ratio(names) >= 0.80:
-        return _POLARIS_LAYOUT
+        return _build_polaris_layout(names)
     if _aurora_match_ratio(names) >= 0.80:
         return _AURORA_LAYOUT
     return _build_generic_layout(names)
