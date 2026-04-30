@@ -26,6 +26,7 @@ __all__ = [
     "extract_requested_nodes",
     "parse_node_count_spec",
     "first_requested_node",
+    "job_node_assignments",
 ]
 _NODE_COUNT_PATTERN = re.compile(r"^(\d+)")
 _NODE_RANGE_PATTERN = re.compile(
@@ -188,3 +189,19 @@ def job_node_summary(job: "Job") -> tuple[Optional[int], Optional[str]]:
         if (count := parse_node_count_spec(job.resources_requested.get(key))) is not None:
             return count, first_node
     return None, None
+
+
+def job_node_assignments(snapshot) -> dict[str, list[str]]:
+    """Return a ``{job_id: [exec_host_node_names]}`` map for running jobs.
+
+    Jobs with no parseable ``exec_host`` are omitted.  Used by the rack-grid
+    view to color each node cell by its current owning job.
+    """
+    result: dict[str, list[str]] = {}
+    for job in snapshot.jobs:
+        if job.state != "R":
+            continue
+        nodes = extract_exec_host_nodes(job.exec_host)
+        if nodes:
+            result[job.id] = nodes
+    return result

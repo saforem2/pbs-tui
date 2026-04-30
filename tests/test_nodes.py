@@ -1,9 +1,11 @@
 import pytest
 
 from pbs_tui.app import job_node_summary
+from pbs_tui.data import SchedulerSnapshot
 from pbs_tui.nodes import (
     extract_exec_host_nodes,
     extract_requested_nodes,
+    job_node_assignments,
     normalize_node_tokens,
     parse_node_count_spec,
 )
@@ -168,3 +170,32 @@ def test_extract_exec_host_nodes(spec, expected):
 )
 def test_extract_requested_nodes(spec, expected):
     assert extract_requested_nodes(spec) == expected
+
+
+def test_job_node_assignments_includes_only_running_jobs():
+    snap = SchedulerSnapshot(
+        jobs=[
+            make_job(id="r1", state="R", exec_host="nodeA/0+nodeB/0"),
+            make_job(id="q1", state="Q", exec_host="nodeC/0"),
+            make_job(id="r2", state="R", exec_host="nodeD/0"),
+        ]
+    )
+    assignments = job_node_assignments(snap)
+    assert assignments == {"r1": ["nodeA", "nodeB"], "r2": ["nodeD"]}
+
+
+def test_job_node_assignments_skips_jobs_without_exec_host():
+    snap = SchedulerSnapshot(
+        jobs=[
+            make_job(id="r1", state="R", exec_host=None),
+            make_job(id="r2", state="R", exec_host=""),
+        ]
+    )
+    assert job_node_assignments(snap) == {}
+
+
+def test_job_node_assignments_handles_bracketed_exec_host():
+    snap = SchedulerSnapshot(
+        jobs=[make_job(id="r1", state="R", exec_host="node[01-03]/0")]
+    )
+    assert job_node_assignments(snap) == {"r1": ["node01", "node02", "node03"]}
