@@ -242,20 +242,15 @@ def build_render_model(
 # Cell glyphs and renderer
 # ---------------------------------------------------------------------------
 
-# Cell glyphs are chosen from East-Asian-width "Neutral" or "Narrow" only —
-# "Ambiguous" glyphs like ■/□ render as 2 cells wide in many terminals
-# (especially macOS Terminal with default fonts), which would clobber the
-# 2-column rack mini-grid layout.
-#
-# The shade-block trio █/▒/░ forms a natural visual progression and gives
-# every cell a real fill rather than a thin outline — much closer to the
-# coloured-blade look of the ALCF status page.
+# Cell glyphs use plain ASCII so every terminal renders them at 1 cell wide.
+# Down/unknown/reservation use distinct ASCII markers that read clearly
+# alongside the colored x/o.
 CELL_GLYPHS: Dict[CellState, str] = {
-    CellState.OCCUPIED: "█",   # FULL BLOCK — colored per job
-    CellState.FREE: "░",       # LIGHT SHADE — sparse texture for empty slot
-    CellState.DOWN: "▒",       # MEDIUM SHADE — coarser texture
+    CellState.OCCUPIED: "x",   # colored per job
+    CellState.FREE: "o",       # muted outline
+    CellState.DOWN: "-",       # struck-through marker
     CellState.UNKNOWN: "?",
-    CellState.RESERVATION: "▓",  # DARK SHADE — heavier texture
+    CellState.RESERVATION: "%",
     CellState.MISSING: " ",
 }
 
@@ -497,7 +492,7 @@ def render_job_list_entry(entry: JobListEntry, palette: Palette,
     style = palette.job_style(entry.palette_index)
     fg = style.replace("on ", "", 1) if style.startswith("on ") else style
     text = Text()
-    text.append("█ ", style=fg)
+    text.append("x ", style=fg)
     label = f"{entry.user} {entry.node_count}n {entry.queue}"
     if entry.time_remaining_str:
         label += f" [{entry.time_remaining_str}]"
