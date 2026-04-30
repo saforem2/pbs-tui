@@ -192,7 +192,6 @@ def test_generic_caps_rack_rows_at_sixteen():
 # Bug-fix regression tests
 # ---------------------------------------------------------------------------
 
-import re as _re
 from pbs_tui.rack_layout import _AURORA_RACK_PATTERN
 
 
