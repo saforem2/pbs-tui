@@ -493,6 +493,7 @@ This dashboard provides a quick overview of the PBS scheduler state.
 - **q**: Quit the application
 - **r**: Refresh scheduler data
 - **g**: Focus the Cluster tab
+- **k**: Focus the Racks tab
 - **j**: Focus the Jobs tab
 - **n**: Focus the Nodes tab
 - **u**: Focus the Queues tab
