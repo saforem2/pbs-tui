@@ -183,20 +183,15 @@ def test_render_to_text_inverts_only_selected_job_cells():
         running_jobs={"j1": 0, "j2": 1},
         selected_job_id="j1",
     )
-    # Walk Text spans and verify only j1 cells got "reverse"
+    # Walk Text spans and verify only j1 cells got the highlight style
+    # (bold underline) — j2's r1-c cell must NOT be highlighted.
     selected_coords = {
         (model.cells_by_node["r1-a"].row, model.cells_by_node["r1-a"].col),
         (model.cells_by_node["r1-b"].row, model.cells_by_node["r1-b"].col),
     }
-    inverted_styles_found: list[tuple[int, int]] = []
-    # Iterate by walking the plain string + spans; simplest is to render and
-    # scan the styles grid directly.  We re-use render_to_text's deterministic
-    # output — j2's r1-c cell must NOT be reverse-styled.
+    highlighted: list[tuple[int, int]] = []
     rendered = text.plain.splitlines()
-    # Sanity: rendered should contain at least the selection's two cells
     assert len(rendered) > 0
-    # Span check: for every span where style starts with "reverse", its
-    # (row, col) must be in selected_coords.
     cursor_row = 0
     cursor_col = 0
     for span_text, span_style in zip(*_walk_text_spans(text)):
@@ -205,10 +200,11 @@ def test_render_to_text_inverts_only_selected_job_cells():
             cursor_col = 0
             continue
         for offset in range(len(span_text)):
-            if span_style and "reverse" in str(span_style):
-                inverted_styles_found.append((cursor_row, cursor_col + offset))
+            style_str = str(span_style) if span_style else ""
+            if "underline" in style_str and "bold" in style_str:
+                highlighted.append((cursor_row, cursor_col + offset))
         cursor_col += len(span_text)
-    assert set(inverted_styles_found) == selected_coords
+    assert set(highlighted) == selected_coords
 
 
 def _walk_text_spans(text):

@@ -243,32 +243,46 @@ def build_render_model(
 # ---------------------------------------------------------------------------
 
 CELL_GLYPHS: Dict[CellState, str] = {
-    CellState.OCCUPIED: " ",
-    CellState.FREE: "░",
-    CellState.DOWN: "×",
+    CellState.OCCUPIED: "■",   # filled square — colored per job
+    CellState.FREE: "□",       # empty square outline
+    CellState.DOWN: "▨",       # hatched — clearly distinct from job/free
     CellState.UNKNOWN: "?",
-    CellState.RESERVATION: "▒",
+    CellState.RESERVATION: "▣",  # square-with-square — reservation marker
     CellState.MISSING: " ",
 }
 
 
+def _bg_to_fg(style: str) -> str:
+    """Convert an ``on <color>`` background style to a foreground style.
+
+    The job palette is built as ``on <hex>`` styles for the cluster grid's
+    block-fill rendering.  The rack grid colours the foreground glyph
+    instead, so we strip the leading ``on``.
+    """
+    return style.replace("on ", "", 1) if style.startswith("on ") else style
+
+
 def _state_style(state: CellState, palette: Palette) -> str:
-    """Style for a non-occupied cell."""
+    """Foreground style for a non-occupied cell."""
     if state == CellState.FREE:
-        return palette.empty_style
+        # Muted empty-square outline derived from the empty palette colour.
+        return _bg_to_fg(palette.empty_style)
     if state == CellState.DOWN:
-        return "on color(235)"
+        return "color(244)"
     if state == CellState.UNKNOWN:
         return "dim"
     if state == CellState.RESERVATION:
-        return "on color(60)"
-    return palette.empty_style
+        return "color(140)"
+    return _bg_to_fg(palette.empty_style)
 
 
 def _invert_style(base_style: str) -> str:
-    """Build a highlight style for a selected job's cells."""
-    fg = base_style.replace("on ", "", 1) if base_style.startswith("on ") else base_style
-    return f"reverse {fg}"
+    """Build a highlight style for a selected job's cells.
+
+    The base style is a foreground colour; we add a bold underline to make
+    selected cells visually pop without needing a background fill.
+    """
+    return f"bold underline {base_style}"
 
 
 def render_to_text(
@@ -323,7 +337,8 @@ def render_to_text(
     for cell in model.cells_by_node.values():
         glyph = CELL_GLYPHS[cell.state]
         if cell.state == CellState.OCCUPIED and cell.owner_job_id in running_jobs:
-            base_style = palette.job_style(running_jobs[cell.owner_job_id])
+            # Job style is "on <hex>"; we want the colour as foreground for ■.
+            base_style = _bg_to_fg(palette.job_style(running_jobs[cell.owner_job_id]))
         else:
             base_style = _state_style(cell.state, palette)
         if selected_job_id and cell.owner_job_id == selected_job_id:
@@ -358,13 +373,13 @@ def build_legend_text() -> Text:
     legend = Text()
     legend.append(CELL_GLYPHS[CellState.FREE], style="dim")
     legend.append(" free  ")
-    legend.append(CELL_GLYPHS[CellState.DOWN], style="dim")
+    legend.append(CELL_GLYPHS[CellState.DOWN], style="color(244)")
     legend.append(" down  ")
     legend.append(CELL_GLYPHS[CellState.UNKNOWN], style="dim")
     legend.append(" unknown  ")
-    legend.append(CELL_GLYPHS[CellState.RESERVATION], style="dim")
+    legend.append(CELL_GLYPHS[CellState.RESERVATION], style="color(140)")
     legend.append(" reservation  ")
-    legend.append("█", style="bold")
+    legend.append(CELL_GLYPHS[CellState.OCCUPIED], style="bold")
     legend.append(" job (click to select)")
     return legend
 
@@ -455,7 +470,7 @@ def render_job_list_entry(entry: JobListEntry, palette: Palette,
     style = palette.job_style(entry.palette_index)
     fg = style.replace("on ", "", 1) if style.startswith("on ") else style
     text = Text()
-    text.append("█ ", style=fg)
+    text.append("■ ", style=fg)
     label = f"{entry.user} {entry.node_count}n {entry.queue}"
     if entry.time_remaining_str:
         label += f" [{entry.time_remaining_str}]"
