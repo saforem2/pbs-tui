@@ -24,7 +24,10 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
+from rich.console import RenderableType
 from rich.text import Text
+from textual.message import Message
+from textual.widget import Widget
 from textual.widgets import Static
 
 from .cluster_grid import Palette  # re-use job-color palette
@@ -450,3 +453,55 @@ def render_job_list_entry(entry: JobListEntry, palette: Palette,
     else:
         text.append(label)
     return text
+
+
+# ---------------------------------------------------------------------------
+# Rack panel widget — rendering + click handling
+# ---------------------------------------------------------------------------
+
+
+class _RackPanel(Widget):
+    """Renders the rack grid and emits clicks as messages."""
+
+    DEFAULT_CSS = """
+    _RackPanel {
+        height: 1fr;
+        overflow-x: scroll;
+        overflow-y: auto;
+        padding: 0 1;
+    }
+    """
+
+    class CellClicked(Message):
+        def __init__(self, node_name: Optional[str], rack_name: Optional[str]) -> None:
+            super().__init__()
+            self.node_name = node_name
+            self.rack_name = rack_name
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._content: RenderableType = Text()
+        self._model: Optional[RenderModel] = None
+
+    def render(self) -> RenderableType:
+        return self._content
+
+    def update(self, content: Text, model: RenderModel) -> None:
+        self._content = content
+        self._model = model
+        self.refresh()
+
+    def on_click(self, event) -> None:
+        if self._model is None:
+            return
+        col = int(event.x)
+        row = int(event.y)
+        # Look for a node at the click location
+        node_name = self._model.cell_at(row, col)
+        if node_name is not None:
+            self.post_message(self.CellClicked(node_name=node_name, rack_name=None))
+            return
+        # Or a rack-name label
+        rack_name = self._model.rack_at(row, col)
+        if rack_name is not None:
+            self.post_message(self.CellClicked(node_name=None, rack_name=rack_name))
