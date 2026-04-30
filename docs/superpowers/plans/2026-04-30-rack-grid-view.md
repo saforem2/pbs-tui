@@ -13,7 +13,7 @@
 - Existing palette/grid implementation: `src/pbs_tui/cluster_grid.py`
 - Existing node-name parsing: `src/pbs_tui/nodes.py`
 - Existing app composition: `src/pbs_tui/app.py`, `src/pbs_tui/app.tcss`
-- Sample data generator (Aurora-style names): `src/pbs_tui/samples.py`
+- Sample data generator (Polaris-style hostnames): `src/pbs_tui/samples.py`
 - Test helpers: `tests/util.py`
 
 **File structure (final):**
@@ -596,7 +596,7 @@ Expected: ImportError for `pbs_tui.rack_grid`.
 Create `src/pbs_tui/rack_grid.py`:
 
 ```python
-"""Rack-organised cluster grid widget.
+"""Rack-organized cluster grid widget.
 
 Renders each rack as a labelled mini-grid of node cells and supports
 selecting a job (via the sidebar list, by clicking a colored cell, or via
@@ -2036,7 +2036,7 @@ Insert a new bullet immediately after it:
 ```markdown
 - **Rack grid** – per-rack node-level view modeled on the ALCF status page.
   Click a node to highlight every node a job occupies; click a rack name to filter the
-  job sidebar. Detects Aurora-style node names; falls back to a generic layout for
+  job sidebar. Detects Aurora and Polaris cabinet hostnames; falls back to a generic layout for
   other clusters.
 ```
 

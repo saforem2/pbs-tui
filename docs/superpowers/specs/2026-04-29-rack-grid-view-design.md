@@ -85,9 +85,10 @@ def parse_node_id(name: str) -> NodeId | None: ...
 def detect_layout(node_names: Iterable[str]) -> MachineLayout: ...
 ```
 
-**Detection rule.** Parse all node names; if ≥80% match a known machine pattern (initially
-`x[34]\d{3}-b\d{2}` for Aurora) use that machine's curated layout. Otherwise produce a generic
-layout from the racks observed in the snapshot.
+**Detection rule.** Parse all node names using the unified ALCF cabinet pattern
+`xRRRRcCsSbBnN`. If ≥80% of names match, the rack-id prefix determines the machine: `x4xxx`
+racks are Aurora; `x3xxx` racks are Polaris. Both use curated layouts. Otherwise produce a
+generic layout from the racks observed in the snapshot.
 
 **Curated vs observed racks.** A curated `MachineLayout.rack_rows` enumerates *every* rack the
 machine is known to have, including racks that no node in the current snapshot mentions. Such
@@ -127,15 +128,17 @@ padding; rack rows are joined vertically with one blank line.
 
 | Node state                  | Glyph | Color                                       |
 |-----------------------------|-------|---------------------------------------------|
-| `job-exclusive`             | space | per-job color (palette inherited from cluster_grid) |
-| `free`                      | `░`   | empty-style (gray)                          |
-| `offline`, `down`           | `×`   | dark-gray                                   |
-| `state-unknown`             | `?`   | dim                                         |
-| `resv-exclusive` (or other) | `▒`   | desaturated accent                          |
+| `job-exclusive`             | `x`   | per-job color (palette inherited from cluster_grid) |
+| `free`                      | `o`   | muted gray foreground                       |
+| `offline`, `down`           | `-`   | dark-gray                                   |
+| `state-unknown`             | `?`   | dim gray                                    |
+| `resv-exclusive` (or other) | `%`   | desaturated accent                          |
+| slot in layout, no node     | ` `   | (blank — slot missing from snapshot)        |
 
-**Selection visual.** When a job is selected, its cells get an inverted style (foreground = job
-color, background = `surface-lighten-3`). The visualization is otherwise unchanged so the user
-can still see other running jobs.
+**Selection visual.** When a job is selected, its cells get a bold-underline highlight style
+(foreground = job color + bold + underline). All other cells are dimmed so the selection stands
+out clearly. No background fill is used. Escape or pressing the escape key clears the selection
+and any active rack filter.
 
 **Color reuse.** The job color palette is shared with `cluster_grid.py`: `RackGridWidget`
 imports `_build_palette` and color helpers from `cluster_grid` to keep palettes consistent
@@ -157,9 +160,9 @@ across tabs and themes (including ANSI themes).
 | Click a colored node cell               | Select that job; sidebar cursor moves to it; detail panel shows job |
 | Click a free/down/unknown node cell     | Select that node; detail panel shows node                  |
 | Click a rack-name label                 | Filter `JobList` to jobs touching that rack; clicking the *same* rack again clears the filter; clicking a *different* rack switches the filter to that rack |
-| Arrow key on focused `RackPanel`        | Move cell cursor; wraps within rack, then to next rack in reading order |
-| `enter` on focused `RackPanel`          | Select what's under the cursor                              |
-| `escape`                                | Clear job selection and rack filter                         |
+| Arrow key on focused `RackPanel`        | Scroll the panel in the arrow direction (no per-cell cursor) |
+| `escape` on focused `RackPanel`         | Clear job selection and rack filter                         |
+| `escape` on focused `JobList`           | Clear rack filter and job selection                         |
 | Sidebar row click / `enter`             | Same as cell click on a colored cell                        |
 
 ### Messages
@@ -194,18 +197,21 @@ def on_rack_grid_widget_node_selected(self, event):
 
 ## Layout detection details
 
-**Aurora (`name="aurora"`)**
-- Rack pattern: `x[34]\d{3}-b\d{2}` where the rack id is the leading `x[34]\d{3}` and the slot
-  is the trailing `b\d{2}`.
-- Rack rows in display order: `x47XX`, `x46XX`, `x45XX`, ... (descending — top-to-bottom mirrors
-  the ALCF screenshot, with top racks numbered higher).
-- Per rack: 2 cols × 7 rows = 14 blades.
+**Unified ALCF cabinet pattern** (`xRRRRcCsSbBnN`)
 
-**Polaris and Sophia**
-- Curated layouts deferred until their actual node-name patterns are verified against live data.
-- Until then, both clusters fall through to the generic detection path. Adding a curated entry
-  later is purely additive (a new entry in the layout-detection table) and does not require
-  changes elsewhere in the widget.
+Both Aurora and Polaris use hostnames matching `x\d{4}c\d+s\d+b\d+n\d+`. The rack id is the
+leading `xRRRR` field. The machine is distinguished by the rack-id prefix:
+
+- `x4xxx` (e.g. `x4000`–`x4720`) → **Aurora** — 2 cols × 7 rows = 14 blades per rack.
+- `x3xxx` (e.g. `x3000`–`x3035`) → **Polaris** — uses its own curated rack layout.
+
+If ≥80% of observed node names match the ALCF pattern and the rack-id prefix selects a known
+machine, that machine's curated `MachineLayout` is used. Racks that exist in the curated layout
+but are absent from the current snapshot still appear as empty mini-grids.
+
+**Sophia**
+- Sophia's hostname format is not yet verified against live data; it falls through to the
+  generic detection path. Adding a curated entry later is purely additive.
 
 **Generic (`name="generic"`)**
 - Group nodes by best-effort rack prefix (the substring before the last `-`, or the leading
@@ -243,8 +249,8 @@ def on_rack_grid_widget_node_selected(self, event):
 - **Reservation detection.** PBS surfaces reservations through node `state` strings and through
   `Job.queue`/`Job.location`; this round only handles node-state glyphs (`resv-exclusive`).
   Reservation-holding jobs not appearing in the sidebar is intentional.
-- **Test fixtures.** The existing `samples.py` Aurora-style mock data already produces parseable
-  node names (`x3001-b00` etc.), so the new tab will render meaningfully under
+- **Test fixtures.** The existing `samples.py` Polaris-style mock data already produces parseable
+  node names (e.g. `x3001c0s0b0n0` etc.), so the new tab will render meaningfully under
   `PBS_TUI_SAMPLE_DATA=1`.
 
 ## Out of scope (explicit)

@@ -15,7 +15,7 @@ import re
 from typing import TYPE_CHECKING, Iterable, Iterator, Optional
 
 if TYPE_CHECKING:
-    from .data import Job
+    from .data import Job, SchedulerSnapshot
 
 __all__ = [
     "split_node_spec",
@@ -191,7 +191,7 @@ def job_node_summary(job: "Job") -> tuple[Optional[int], Optional[str]]:
     return None, None
 
 
-def job_node_assignments(snapshot) -> dict[str, list[str]]:
+def job_node_assignments(snapshot: "SchedulerSnapshot") -> dict[str, list[str]]:
     """Return a ``{job_id: [exec_host_node_names]}`` map for running jobs.
 
     Jobs with no parseable ``exec_host`` are omitted.  Used by the rack-grid

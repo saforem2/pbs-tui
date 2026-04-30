@@ -152,7 +152,11 @@ class RenderModel:
 
 def _rack_box_size(spec: RackSpec) -> Tuple[int, int]:
     """Return (width, height) of a single rack's rendered box."""
-    label_width = max(spec.cols, len(spec.name))  # ensure label fits
+    cap = spec.capacity()
+    # The util string "n/N" can be wider than either the rack name or the
+    # column count (e.g. rack "r1" col=2, util "10/14" is 5 chars wide).
+    util_width = len(f"{cap}/{cap}")
+    label_width = max(spec.cols, len(spec.name), util_width)  # ensure all fit
     height = RACK_LABEL_LINES + RACK_UTIL_LINES + spec.rows + RACK_TRAILING_LINES
     return label_width, height
 
@@ -293,7 +297,7 @@ def _state_style(state: CellState, palette: Palette) -> str:
     return _FREE_FG
 
 
-def _invert_style(base_style: str) -> str:
+def _highlight_style(base_style: str) -> str:
     """Build a highlight style for a selected job's cells.
 
     The base style is a foreground colour; we add a bold underline to make
@@ -313,7 +317,7 @@ def render_to_text(
 
     *running_jobs* maps job_id → palette index so cell colors stay consistent
     with the legend.  *selected_job_id*, if not None, marks every cell of that
-    job with an inverted style.
+    job with a highlight style (bold underline).
     """
     # Build a 2-D char grid + style grid initialised to spaces.
     chars: List[List[str]] = [[" "] * model.width for _ in range(model.height)]
@@ -331,8 +335,11 @@ def render_to_text(
 
     # Count occupied per rack for the utilization line.
     occupied_per_rack: Dict[str, int] = defaultdict(int)
+    # Use actual slot count rather than spec capacity so the denominator
+    # reflects real slots (Aurora geometry rounding means len(slots) can be
+    # less than spec.capacity()).
     total_per_rack: Dict[str, int] = {
-        rack: model.layout.rack_specs[rack].capacity()
+        rack: len(model.layout.rack_slots.get(rack, [])) or model.layout.rack_specs[rack].capacity()
         for rack in model.rack_placements
     }
     for cell in model.cells_by_node.values():
@@ -360,7 +367,7 @@ def render_to_text(
             base_style = _state_style(cell.state, palette)
         if selected_job_id is not None:
             if cell.owner_job_id == selected_job_id:
-                base_style = _invert_style(base_style)
+                base_style = _highlight_style(base_style)
             else:
                 # Dim every non-selected cell so the selection stands out.
                 base_style = f"dim {base_style}"
@@ -542,15 +549,25 @@ class _RackPanel(ScrollableContainer):
         ("pagedown", "page_down", "PgDn"),
         ("home", "scroll_home", "Top"),
         ("end", "scroll_end", "Bottom"),
+        ("escape", "clear_selection", "Clear"),
     ]
 
     can_focus = True
 
     class CellClicked(Message):
-        def __init__(self, node_name: Optional[str], rack_name: Optional[str]) -> None:
+        def __init__(
+            self,
+            node_name: Optional[str],
+            rack_name: Optional[str],
+            owner_job_id: Optional[str] = None,
+        ) -> None:
             super().__init__()
             self.node_name = node_name
             self.rack_name = rack_name
+            self.owner_job_id = owner_job_id
+
+    class SelectionCleared(Message):
+        pass
 
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -569,6 +586,9 @@ class _RackPanel(ScrollableContainer):
         self._inner.update(content)
         self._model = model
 
+    def action_clear_selection(self) -> None:
+        self.post_message(self.SelectionCleared())
+
     def on_click(self, event) -> None:
         if self._model is None:
             return
@@ -578,7 +598,15 @@ class _RackPanel(ScrollableContainer):
         row = int(event.y) + int(self.scroll_offset.y)
         node_name = self._model.cell_at(row, col)
         if node_name is not None:
-            self.post_message(self.CellClicked(node_name=node_name, rack_name=None))
+            # Look up the owner directly from the pre-computed cell data.
+            owner_job_id = self._model.cells_by_node[node_name].owner_job_id
+            self.post_message(
+                self.CellClicked(
+                    node_name=node_name,
+                    rack_name=None,
+                    owner_job_id=owner_job_id,
+                )
+            )
             return
         rack_name = self._model.rack_at(row, col)
         if rack_name is not None:
@@ -683,6 +711,12 @@ class _JobListWidget(Widget):
         self.post_message(self.FilterCleared())
 
     def on_click(self, event) -> None:
+        # When a rack filter is active the header occupies 3 lines (chip line 0,
+        # chip line 1, blank line 2).  Clicking anywhere in that header area
+        # (y < 3) clears the filter — the chip text says "esc or click chip".
+        if self._rack_filter and int(event.y) < 3:
+            self.post_message(self.FilterCleared())
+            return
         # Map click row to an entry index. Header takes 0-2 lines depending on filter.
         offset = 3 if self._rack_filter else 0
         row = int(event.y) - offset
@@ -792,14 +826,17 @@ class RackGridWidget(Vertical):
 
     # ── message handlers ────────────────────────────────────────
 
+    def on__rack_panel_selection_cleared(
+        self, event: "_RackPanel.SelectionCleared"
+    ) -> None:
+        self._selected_job_id = None
+        self._rack_filter = None
+        self._rebuild()
+
     def on__rack_panel_cell_clicked(self, event: "_RackPanel.CellClicked") -> None:
         if event.node_name:
-            # If the cell belongs to a running job, select that job; else node
-            assignments = job_node_assignments(self._snapshot) if self._snapshot else {}
-            owning_job = next(
-                (jid for jid, ns in assignments.items() if event.node_name in ns),
-                None,
-            )
+            # owner_job_id is pre-computed by the click handler from cells_by_node.
+            owning_job = event.owner_job_id
             if owning_job:
                 self._selected_job_id = owning_job
                 self.post_message(self.JobSelected(owning_job))

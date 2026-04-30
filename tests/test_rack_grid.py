@@ -227,8 +227,98 @@ def _walk_text_spans(text):
     return seg_texts, seg_styles
 
 
-from pbs_tui.rack_grid import build_job_list_entries, JobListEntry
+from pbs_tui.rack_grid import build_job_list_entries, JobListEntry, _rack_box_size
+from pbs_tui.rack_layout import RackSpec
 from tests.util import make_job
+
+
+# ---------------------------------------------------------------------------
+# Tests for items from PR #19 review feedback
+# ---------------------------------------------------------------------------
+
+
+def test_escape_binding_exists_on_rack_panel():
+    """_RackPanel.BINDINGS must include an escape binding."""
+    from pbs_tui.rack_grid import _RackPanel
+    keys = [b[0] for b in _RackPanel.BINDINGS]
+    assert "escape" in keys
+
+
+def test_rack_panel_selection_cleared_message_class_exists():
+    """_RackPanel.SelectionCleared message class must exist."""
+    from pbs_tui.rack_grid import _RackPanel
+    assert hasattr(_RackPanel, "SelectionCleared")
+    # It should be a Message subclass
+    from textual.message import Message
+    assert issubclass(_RackPanel.SelectionCleared, Message)
+
+
+def test_cell_clicked_message_carries_owner_job_id():
+    """_RackPanel.CellClicked must carry owner_job_id."""
+    from pbs_tui.rack_grid import _RackPanel
+    msg = _RackPanel.CellClicked(node_name="r1-a", rack_name=None, owner_job_id="j99")
+    assert msg.node_name == "r1-a"
+    assert msg.rack_name is None
+    assert msg.owner_job_id == "j99"
+
+
+def test_cell_clicked_owner_job_id_defaults_to_none():
+    """owner_job_id should default to None for backward compat (rack clicks)."""
+    from pbs_tui.rack_grid import _RackPanel
+    msg = _RackPanel.CellClicked(node_name=None, rack_name="r1")
+    assert msg.owner_job_id is None
+
+
+def test_rack_box_size_accounts_for_util_width():
+    """Width must be at least as wide as the util 'n/N' string."""
+    # Rack "r1" with cols=2, capacity 14: util "14/14" is 5 chars but cols=2
+    spec = RackSpec(name="r1", rows=7, cols=2)
+    assert spec.capacity() == 14
+    util_str = f"{spec.capacity()}/{spec.capacity()}"
+    assert len(util_str) == 5  # "14/14"
+    width, _ = _rack_box_size(spec)
+    assert width >= len(util_str), (
+        f"rack box width {width} narrower than util string '{util_str}'"
+    )
+
+
+def test_rack_box_size_name_still_fits():
+    """Width must also fit the rack name."""
+    spec = RackSpec(name="x4702", rows=7, cols=2)
+    width, _ = _rack_box_size(spec)
+    assert width >= len("x4702")
+
+
+def test_render_to_text_uses_real_slot_count_for_util():
+    """Util denominator is len(rack_slots[rack]), not spec.capacity().
+
+    When a rack has fewer real slots than capacity() (common after Aurora
+    geometry rounding), the denominator shown must match the slot count.
+    """
+    from pbs_tui.rack_layout import MachineLayout
+
+    # Build a layout where r1 has capacity 4 (2×2) but only 3 real slots.
+    spec = RackSpec(name="r1", rows=2, cols=2)
+    assert spec.capacity() == 4
+    layout = MachineLayout(
+        name="test",
+        rack_rows=[["r1"]],
+        rack_specs={"r1": spec},
+        rack_slots={"r1": ["r1-a", "r1-b", "r1-c"]},  # only 3 slots
+    )
+    snap = SchedulerSnapshot(
+        nodes=[
+            Node(name="r1-a", state="job-exclusive"),
+            Node(name="r1-b", state="free"),
+            Node(name="r1-c", state="free"),
+        ],
+        jobs=[],
+    )
+    model = build_render_model(layout, snap, job_assignments={"j1": ["r1-a"]})
+    text = render_to_text(model, palette=_palette(), running_jobs={"j1": 0}, selected_job_id=None)
+    # The util line should show "1/3" (1 occupied out of 3 real slots), not "1/4"
+    assert "1/3" in text.plain
+    assert "1/4" not in text.plain
 
 
 def test_build_job_list_entries_sorts_by_node_count_descending():
