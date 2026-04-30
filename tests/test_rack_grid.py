@@ -96,3 +96,65 @@ def test_build_render_model_assigns_text_coordinates_within_grid():
     # cell_at on a node's coordinates returns that node's id
     sample = next(iter(model.cells_by_node.values()))
     assert model.cell_at(sample.row, sample.col) == sample.node_name
+
+
+from pbs_tui.cluster_grid import Palette
+from pbs_tui.rack_grid import render_to_text
+
+
+def _palette() -> Palette:
+    return Palette(
+        job_styles=["on blue", "on red", "on green"],
+        agg_colors=["#445566"],
+        empty_style="on color(236)",
+    )
+
+
+def test_render_to_text_produces_expected_dimensions():
+    layout = _two_rack_layout()
+    snap = SchedulerSnapshot(
+        nodes=[Node(name=f"r{r}-{s}", state="free")
+               for r in (1, 2) for s in ("a", "b", "c", "d")],
+        jobs=[],
+    )
+    model = build_render_model(layout, snap, job_assignments={})
+    text = render_to_text(model, palette=_palette(), running_jobs={}, selected_job_id=None)
+    plain = text.plain
+    lines = plain.splitlines()
+    assert len(lines) >= model.height - 1  # trailing newline may be omitted
+    # Rack labels appear on the first line
+    assert "r1" in lines[0]
+    assert "r2" in lines[0]
+
+
+def test_render_to_text_uses_glyph_for_each_state():
+    layout = _two_rack_layout()
+    snap = SchedulerSnapshot(
+        nodes=[
+            Node(name="r1-a", state="free"),
+            Node(name="r1-b", state="job-exclusive"),
+            Node(name="r1-c", state="offline"),
+            Node(name="r1-d", state="state-unknown"),
+            Node(name="r2-a", state="resv-exclusive"),
+            Node(name="r2-b", state="free"),
+            Node(name="r2-c", state="free"),
+            Node(name="r2-d", state="free"),
+        ],
+        jobs=[],
+    )
+    model = build_render_model(
+        layout, snap, job_assignments={"j1": ["r1-b"]}
+    )
+    text = render_to_text(
+        model,
+        palette=_palette(),
+        running_jobs={"j1": 0},  # palette index 0
+        selected_job_id=None,
+    )
+    plain = text.plain
+    # Glyphs from CELL_GLYPHS should appear
+    from pbs_tui.rack_grid import CELL_GLYPHS
+    assert CELL_GLYPHS[CellState.FREE] in plain
+    assert CELL_GLYPHS[CellState.DOWN] in plain
+    assert CELL_GLYPHS[CellState.UNKNOWN] in plain
+    assert CELL_GLYPHS[CellState.RESERVATION] in plain

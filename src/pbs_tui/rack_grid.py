@@ -24,6 +24,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
+from rich.text import Text
+
+from .cluster_grid import Palette  # re-use job-color palette
 from .data import Node, SchedulerSnapshot
 from .rack_layout import MachineLayout, RackSpec
 
@@ -35,6 +38,8 @@ __all__ = [
     "RackPlacement",
     "RenderModel",
     "build_render_model",
+    "CELL_GLYPHS",
+    "render_to_text",
 ]
 
 
@@ -209,3 +214,107 @@ def build_render_model(
         _coord_to_node=coord_to_node,
         _job_to_nodes=dict(job_to_nodes),
     )
+
+
+# ---------------------------------------------------------------------------
+# Cell glyphs and renderer
+# ---------------------------------------------------------------------------
+
+CELL_GLYPHS: Dict[CellState, str] = {
+    CellState.OCCUPIED: " ",
+    CellState.FREE: "░",
+    CellState.DOWN: "×",
+    CellState.UNKNOWN: "?",
+    CellState.RESERVATION: "▒",
+    CellState.MISSING: " ",
+}
+
+
+def _state_style(state: CellState, palette: Palette) -> str:
+    """Style for a non-occupied cell."""
+    if state == CellState.FREE:
+        return palette.empty_style
+    if state == CellState.DOWN:
+        return "on color(235)"
+    if state == CellState.UNKNOWN:
+        return "dim"
+    if state == CellState.RESERVATION:
+        return "on color(60)"
+    return palette.empty_style
+
+
+def _invert_style(base_style: str) -> str:
+    """Build a highlight style for a selected job's cells."""
+    fg = base_style.replace("on ", "", 1) if base_style.startswith("on ") else base_style
+    return f"reverse {fg}"
+
+
+def render_to_text(
+    model: RenderModel,
+    *,
+    palette: Palette,
+    running_jobs: Dict[str, int],
+    selected_job_id: Optional[str],
+) -> Text:
+    """Render *model* as a Rich Text grid.
+
+    *running_jobs* maps job_id → palette index so cell colors stay consistent
+    with the legend.  *selected_job_id*, if not None, marks every cell of that
+    job with an inverted style.
+    """
+    # Build a 2-D char grid + style grid initialised to spaces.
+    chars: List[List[str]] = [[" "] * model.width for _ in range(model.height)]
+    styles: List[List[str]] = [[""] * model.width for _ in range(model.height)]
+
+    # Place rack labels.
+    for placement in model.rack_placements.values():
+        label = placement.rack
+        label_pad = max(0, (placement.width - len(label)) // 2)
+        for i, ch in enumerate(label):
+            c = placement.col + label_pad + i
+            if 0 <= c < model.width:
+                chars[placement.row][c] = ch
+                styles[placement.row][c] = "bold"
+
+    # Count occupied per rack for the utilization line.
+    occupied_per_rack: Dict[str, int] = defaultdict(int)
+    total_per_rack: Dict[str, int] = {
+        rack: model.layout.rack_specs[rack].capacity()
+        for rack in model.rack_placements
+    }
+    for cell in model.cells_by_node.values():
+        if cell.rack_name and cell.state == CellState.OCCUPIED:
+            occupied_per_rack[cell.rack_name] += 1
+
+    # Write utilization lines (row = placement.row + RACK_LABEL_LINES).
+    for placement in model.rack_placements.values():
+        util = f"{occupied_per_rack[placement.rack]}/{total_per_rack[placement.rack]}"
+        util_pad = max(0, (placement.width - len(util)) // 2)
+        util_row = placement.row + RACK_LABEL_LINES
+        for i, ch in enumerate(util):
+            c = placement.col + util_pad + i
+            if 0 <= c < model.width and util_row < model.height:
+                chars[util_row][c] = ch
+                styles[util_row][c] = "dim"
+
+    # Place node cells.
+    for cell in model.cells_by_node.values():
+        glyph = CELL_GLYPHS[cell.state]
+        if cell.state == CellState.OCCUPIED and cell.owner_job_id in running_jobs:
+            base_style = palette.job_style(running_jobs[cell.owner_job_id])
+        else:
+            base_style = _state_style(cell.state, palette)
+        if selected_job_id and cell.owner_job_id == selected_job_id:
+            base_style = _invert_style(base_style)
+        if 0 <= cell.row < model.height and 0 <= cell.col < model.width:
+            chars[cell.row][cell.col] = glyph
+            styles[cell.row][cell.col] = base_style
+
+    # Assemble Rich Text — append per-cell to keep style runs accurate.
+    out = Text()
+    for r in range(model.height):
+        for c in range(model.width):
+            out.append(chars[r][c], style=styles[r][c] or None)
+        if r < model.height - 1:
+            out.append("\n")
+    return out
