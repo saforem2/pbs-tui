@@ -51,3 +51,32 @@ def test_machine_layout_construction():
     assert layout.rack_rows == [["x4702", "x4703"]]
     assert layout.rack_specs["x4702"].rows == 7
     assert len(layout.rack_slots["x4702"]) == 14
+
+
+from pbs_tui.rack_layout import detect_layout
+
+
+def test_detect_aurora_layout_from_node_names():
+    # 14 Aurora-pattern names + 0 others — well above the 80% threshold
+    names = [f"x4702-b{i:02d}" for i in range(14)]
+    layout = detect_layout(names)
+    assert layout.name == "aurora"
+    # Aurora curated rack rows are listed top-down with descending row prefix
+    # (x47XX above x46XX above ...). x4702 is in the top row.
+    top_row = layout.rack_rows[0]
+    assert "x4702" in top_row
+    # Each Aurora rack has 14 slots arranged 2 cols x 7 rows
+    assert layout.rack_specs["x4702"].cols == 2
+    assert layout.rack_specs["x4702"].rows == 7
+    assert layout.rack_slots["x4702"] == [f"b{i:02d}" for i in range(14)]
+
+
+def test_detect_aurora_layout_includes_empty_racks():
+    # Single observed rack — curated layout should still enumerate every rack
+    names = ["x4702-b00"]
+    layout = detect_layout(names)
+    assert layout.name == "aurora"
+    # Layout must contain more than the one observed rack
+    assert len(layout.all_racks()) > 1
+    # The observed rack must be present in the curated rows
+    assert "x4702" in layout.all_racks()
