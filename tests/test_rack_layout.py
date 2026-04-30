@@ -80,3 +80,41 @@ def test_detect_aurora_layout_includes_empty_racks():
     assert len(layout.all_racks()) > 1
     # The observed rack must be present in the curated rows
     assert "x4702" in layout.all_racks()
+
+
+def test_detect_generic_layout_for_unknown_names():
+    # No Aurora-pattern names — should fall to generic
+    names = ["nodeA-01", "nodeA-02", "nodeA-03", "nodeA-04",
+             "nodeB-01", "nodeB-02"]
+    layout = detect_layout(names)
+    assert layout.name == "generic"
+    racks = set(layout.all_racks())
+    assert racks == {"nodeA", "nodeB"}
+    # nodeA has 4 slots — square shape: cols=2, rows=2
+    assert layout.rack_specs["nodeA"].cols == 2
+    assert layout.rack_specs["nodeA"].rows == 2
+    # nodeB has 2 slots — square-ish: cols=2, rows=1
+    assert layout.rack_specs["nodeB"].cols == 2
+    assert layout.rack_specs["nodeB"].rows == 1
+
+
+def test_detect_layout_below_aurora_threshold_falls_to_generic():
+    # 5 Aurora + 5 unknown = 50% < 80% threshold
+    names = [f"x4702-b{i:02d}" for i in range(5)] + [f"node-{i}" for i in range(5)]
+    layout = detect_layout(names)
+    assert layout.name == "generic"
+
+
+def test_detect_empty_layout_returns_generic_with_no_racks():
+    layout = detect_layout([])
+    assert layout.name == "generic"
+    assert layout.all_racks() == []
+
+
+def test_generic_caps_rack_rows_at_sixteen():
+    # 1000 slots in one rack → cols = 32, rows capped at 16
+    names = [f"big-{i:04d}" for i in range(1000)]
+    layout = detect_layout(names)
+    spec = layout.rack_specs["big"]
+    assert spec.rows == 16
+    assert spec.cols >= 32
