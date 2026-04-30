@@ -26,13 +26,14 @@ from typing import Dict, List, Optional, Tuple
 
 from rich.console import RenderableType
 from rich.text import Text
+from textual.containers import Horizontal, Vertical
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Static
 
-from .cluster_grid import Palette, _build_palette, AGGREGATED_QUEUES  # re-use job-color palette
+from .cluster_grid import Palette, _build_palette
 from .data import Job, Node, SchedulerSnapshot
-from .nodes import job_node_summary, job_node_assignments
+from .nodes import job_node_assignments
 from .rack_layout import MachineLayout, RackSpec, parse_node_id, detect_layout
 from .time_utils import format_remaining, time_remaining
 
@@ -570,6 +571,11 @@ class _JobListWidget(Widget):
             text.append("(no running jobs)", style="dim")
             self._content = text
             return
+        if self._palette is None:
+            # No palette yet — render a placeholder until the parent calls update()
+            text.append("(loading…)", style="dim")
+            self._content = text
+            return
         for i, entry in enumerate(self._entries):
             prefix = "▶ " if i == self._cursor else "  "
             text.append(prefix)
@@ -610,8 +616,6 @@ class _JobListWidget(Widget):
 # ---------------------------------------------------------------------------
 # Public composite widget
 # ---------------------------------------------------------------------------
-
-from textual.containers import Horizontal, Vertical
 
 
 class RackGridWidget(Vertical):
