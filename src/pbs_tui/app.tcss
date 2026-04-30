@@ -69,3 +69,7 @@ DataTable {
 
 Footer {
 }
+
+#rack_grid {
+    padding: 1 2;
+}
