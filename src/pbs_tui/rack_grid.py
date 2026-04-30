@@ -28,8 +28,10 @@ from rich.text import Text
 from textual.widgets import Static
 
 from .cluster_grid import Palette  # re-use job-color palette
-from .data import Node, SchedulerSnapshot
-from .rack_layout import MachineLayout, RackSpec
+from .data import Job, Node, SchedulerSnapshot
+from .nodes import job_node_summary
+from .rack_layout import MachineLayout, RackSpec, parse_node_id
+from .time_utils import format_remaining, time_remaining
 
 
 __all__ = [
@@ -43,6 +45,9 @@ __all__ = [
     "render_to_text",
     "build_legend_text",
     "build_header_text",
+    "JobListEntry",
+    "build_job_list_entries",
+    "render_job_list_entry",
 ]
 
 
@@ -369,3 +374,79 @@ def build_header_text(layout: MachineLayout, snapshot: SchedulerSnapshot,
         header.append(f"{down:,}", style="bold red")
         header.append(" down")
     return header
+
+
+# ---------------------------------------------------------------------------
+# Sidebar job list — data model and renderer
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class JobListEntry:
+    job_id: str
+    user: str
+    queue: str
+    node_count: int
+    palette_index: int
+    time_remaining_str: str
+    nodes: List[str]
+
+
+def build_job_list_entries(
+    snapshot: SchedulerSnapshot,
+    assignments: Dict[str, List[str]],
+    *,
+    palette_index: Dict[str, int],
+    rack_filter: Optional[str] = None,
+) -> List[JobListEntry]:
+    """Build the sidebar entry list (running jobs only).
+
+    Jobs are returned sorted by node count descending.  When *rack_filter* is
+    provided, only jobs with at least one node whose rack matches the filter
+    string are included.
+    """
+    entries: List[JobListEntry] = []
+    ref = snapshot.timestamp
+    by_id: Dict[str, Job] = {j.id: j for j in snapshot.jobs}
+    for job_id, nodes in assignments.items():
+        job = by_id.get(job_id)
+        if job is None or job.state != "R":
+            continue
+        if rack_filter is not None:
+            if not any(_node_matches_rack(n, rack_filter) for n in nodes):
+                continue
+        remaining = time_remaining(job, ref)
+        entries.append(JobListEntry(
+            job_id=job.id,
+            user=job.user or "?",
+            queue=job.queue or "",
+            node_count=len(nodes),
+            palette_index=palette_index.get(job.id, 0),
+            time_remaining_str=format_remaining(remaining),
+            nodes=list(nodes),
+        ))
+    entries.sort(key=lambda e: e.node_count, reverse=True)
+    return entries
+
+
+def _node_matches_rack(node_name: str, rack: str) -> bool:
+    """Return True when *node_name* belongs to *rack*."""
+    parsed = parse_node_id(node_name)
+    return parsed is not None and parsed.rack == rack
+
+
+def render_job_list_entry(entry: JobListEntry, palette: Palette,
+                          *, selected: bool) -> Text:
+    """Render one sidebar row as Rich Text."""
+    style = palette.job_style(entry.palette_index)
+    fg = style.replace("on ", "", 1) if style.startswith("on ") else style
+    text = Text()
+    text.append("█ ", style=fg)
+    label = f"{entry.user} {entry.node_count}n {entry.queue}"
+    if entry.time_remaining_str:
+        label += f" [{entry.time_remaining_str}]"
+    if selected:
+        text.append(label, style="bold")
+    else:
+        text.append(label)
+    return text

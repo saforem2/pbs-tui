@@ -229,3 +229,45 @@ def _walk_text_spans(text):
         seg_texts.append(chunk)
         seg_styles.append(active_style)
     return seg_texts, seg_styles
+
+
+from pbs_tui.rack_grid import build_job_list_entries, JobListEntry
+from tests.util import make_job
+
+
+def test_build_job_list_entries_sorts_by_node_count_descending():
+    snap = SchedulerSnapshot(
+        jobs=[
+            make_job(id="small", state="R", queue="capacity", user="alice",
+                     exec_host="r1-a/0"),
+            make_job(id="big", state="R", queue="large", user="bob",
+                     exec_host="r1-a/0+r1-b/0+r1-c/0"),
+            make_job(id="queued", state="Q", queue="capacity", user="bob",
+                     exec_host=None),
+        ],
+        timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    )
+    assignments = {"big": ["r1-a", "r1-b", "r1-c"], "small": ["r1-a"]}
+    entries = build_job_list_entries(snap, assignments, palette_index={"big": 0, "small": 1})
+    ids = [e.job_id for e in entries]
+    assert ids == ["big", "small"]
+    assert entries[0].node_count == 3
+    assert entries[1].node_count == 1
+
+
+def test_build_job_list_entries_filter_by_rack():
+    """Filtering keeps only jobs that touch the requested rack."""
+    snap = SchedulerSnapshot(
+        jobs=[
+            make_job(id="j1", state="R", queue="x", user="a",
+                     exec_host="r1-a/0+r1-b/0"),
+            make_job(id="j2", state="R", queue="x", user="b",
+                     exec_host="r2-a/0"),
+        ],
+        timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    )
+    assignments = {"j1": ["r1-a", "r1-b"], "j2": ["r2-a"]}
+    palette_index = {"j1": 0, "j2": 1}
+    entries = build_job_list_entries(snap, assignments, palette_index=palette_index,
+                                     rack_filter="r1")
+    assert [e.job_id for e in entries] == ["j1"]
