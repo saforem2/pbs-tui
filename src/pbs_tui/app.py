@@ -43,6 +43,7 @@ from .fetcher import PBSDataFetcher
 from .nodes import job_node_summary
 from .time_utils import parse_duration_spec
 from .cluster_grid import ClusterGridWidget
+from .rack_grid import RackGridWidget
 from .ui_config import JOB_TABLE_COLUMNS
 
 _LOGGER = logging.getLogger(__name__)
@@ -492,6 +493,7 @@ This dashboard provides a quick overview of the PBS scheduler state.
 - **q**: Quit the application
 - **r**: Refresh scheduler data
 - **g**: Focus the Cluster tab
+- **k**: Focus the Racks tab
 - **j**: Focus the Jobs tab
 - **n**: Focus the Nodes tab
 - **u**: Focus the Queues tab
@@ -579,6 +581,7 @@ class PBSTUI(App[None]):
         ("q", "quit", "Quit"),
         ("r", "refresh", "Refresh now"),
         ("g", "focus_cluster", "Focus cluster"),
+        ("k", "focus_racks", "Focus racks"),
         ("j", "focus_jobs", "Focus jobs"),
         ("n", "focus_nodes", "Focus nodes"),
         ("u", "focus_queues", "Focus queues"),
@@ -632,6 +635,8 @@ class PBSTUI(App[None]):
                             yield JobsTable(id="jobs_table")
                     with TabPane("Cluster", id="cluster_tab"):
                         yield ClusterGridWidget(id="cluster_grid")
+                    with TabPane("Racks", id="racks_tab"):
+                        yield RackGridWidget(id="rack_grid")
                     with TabPane("Nodes", id="nodes_tab"):
                         yield NodesTable(id="nodes_table")
                     with TabPane("Queues", id="queues_tab"):
@@ -683,6 +688,7 @@ class PBSTUI(App[None]):
         nodes_table.update_nodes(snapshot.nodes)
         queues_table.update_queues(snapshot.queues)
         cluster_grid.update_from_snapshot(snapshot)
+        self.query_one(RackGridWidget).update_from_snapshot(snapshot)
         self._job_index = {job.id: job for job in snapshot.jobs}
         self._node_index = {node.name: node for node in snapshot.nodes}
         self._queue_index = {queue.name: queue for queue in snapshot.queues}
@@ -737,6 +743,11 @@ class PBSTUI(App[None]):
     def action_focus_cluster(self) -> None:
         tabbed_content = self.query_one(TabbedContent)
         tabbed_content.active = "cluster_tab"
+        tabbed_content.focus()
+
+    def action_focus_racks(self) -> None:
+        tabbed_content = self.query_one(TabbedContent)
+        tabbed_content.active = "racks_tab"
         tabbed_content.focus()
 
     def action_focus_jobs(self) -> None:
@@ -807,6 +818,34 @@ class PBSTUI(App[None]):
                     self.query_one(DetailPanel).show_queue(queue)
                 else:
                     self.query_one(DetailPanel).hide()
+
+    def on_rack_grid_widget_job_selected(
+        self, event: RackGridWidget.JobSelected
+    ) -> None:
+        if self._snapshot is None or not self._detail_panel_enabled:
+            return
+        job = self._job_index.get(event.job_id)
+        if job:
+            self._selected_job_id = job.id
+            self._selected_node_name = None
+            self._selected_queue_name = None
+            self._detail_source = "job"
+            self.query_one(DetailPanel).show_job(
+                job, reference_time=self._snapshot.timestamp
+            )
+
+    def on_rack_grid_widget_node_selected(
+        self, event: RackGridWidget.NodeSelected
+    ) -> None:
+        if self._snapshot is None or not self._detail_panel_enabled:
+            return
+        node = self._node_index.get(event.node_name)
+        if node:
+            self._selected_node_name = node.name
+            self._selected_job_id = None
+            self._selected_queue_name = None
+            self._detail_source = "node"
+            self.query_one(DetailPanel).show_node(node)
 
     def on_cluster_grid_widget_cell_clicked(
         self, event: ClusterGridWidget.CellClicked

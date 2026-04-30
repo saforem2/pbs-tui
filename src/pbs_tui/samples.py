@@ -95,7 +95,8 @@ def sample_snapshot(now: datetime | None = None) -> SchedulerSnapshot:
     now = now or datetime.now(timezone.utc)
 
     # ── build all node names ────────────────────────────────────────
-    # Aurora-style: racks x3001-x3016, x3101-x3112, x3201-x3212
+    # Polaris-style hostnames: xRRRRc0sSSb0n0
+    # Rack layout: 16 racks (x3001-x3016) on top row, 12 each on rows 2-3.
     rack_ranges = [
         ("x30", 1, 16),
         ("x31", 1, 12),
@@ -105,9 +106,10 @@ def sample_snapshot(now: datetime | None = None) -> SchedulerSnapshot:
     for prefix, start, end in rack_ranges:
         for rack_num in range(start, end + 1):
             rack = f"{prefix}{rack_num:02d}"
-            # Each rack has ~14 nodes
-            for blade in range(14):
-                all_node_names.append(f"{rack}-b{blade:02d}")
+            # Polaris layout: 7 chassis slots x 2 blades = 14 nodes per rack.
+            for slot in range(7):
+                for blade in range(2):
+                    all_node_names.append(f"{rack}c0s{slot}b{blade}n0")
 
     # Trim to target size
     all_node_names = all_node_names[:561]

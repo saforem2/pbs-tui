@@ -10,30 +10,52 @@ track workload health in real time.
 
 <table>
 <tr>
-<th>Cluster Grid</th>
-<th>Jobs Table</th>
+<th>Racks Grid (Polaris)</th>
+<th>Cluster Grid (Polaris)</th>
+</tr>
+<tr>
+<td><img src="assets/racks-polaris.png" alt="Rack grid showing per-node utilization across the Polaris layout" /></td>
+<td><img src="assets/cluster-polaris.png" alt="Cluster grid showing proportional node utilization on Polaris" /></td>
+</tr>
+<tr>
+<th>Racks Grid (Aurora)</th>
+<th>Cluster Grid (Aurora)</th>
+</tr>
+<tr>
+<td><img src="assets/racks-aurora.png" alt="Rack grid showing per-node utilization across the Aurora layout" /></td>
+<td><img src="assets/cluster-aurora.png" alt="Cluster grid showing proportional node utilization on Aurora" /></td>
+</tr>
+</table>
+
+<details><summary>More views &amp; themes</summary>
+
+<table>
+<tr>
+<th>Cluster Grid (dark)</th>
+<th>Jobs Table (dark)</th>
 </tr>
 <tr>
 <td><img src="assets/cluster-dark.png" alt="Cluster grid (dark)" /></td>
 <td><img src="assets/jobs-dark.png" alt="Jobs table (dark)" /></td>
 </tr>
 <tr>
+<th>Cluster Grid (light)</th>
+<th>Jobs Table (light)</th>
+</tr>
+<tr>
 <td><img src="assets/cluster-light.png" alt="Cluster grid (light)" /></td>
 <td><img src="assets/jobs-light.png" alt="Jobs table (light)" /></td>
 </tr>
-</table>
-
-<details><summary>More themes</summary>
-<table>
 <tr>
-<th>Catppuccin</th>
-<th>One Dark</th>
+<th>Cluster Grid (Catppuccin)</th>
+<th>Cluster Grid (One Dark)</th>
 </tr>
 <tr>
 <td><img src="assets/cluster-catppuccin.png" alt="Cluster grid (catppuccin)" /></td>
 <td><img src="assets/cluster-onedark.png" alt="Cluster grid (onedark)" /></td>
 </tr>
 </table>
+
 </details>
 
 
@@ -49,6 +71,10 @@ track workload health in real time.
 
 - **Cluster grid** – visual map of cluster node utilization with proportional legend bar.
   Click a job block to see its details. Colors adapt to the active theme.
+- **Rack grid** – per-rack node-level view modeled on the ALCF status page.
+  Click a node to highlight every node a job occupies; click a rack name to filter the
+  job sidebar. Detects Aurora and Polaris cabinet hostnames; falls back to a generic layout for
+  other clusters.
 - **Live PBS data** – prefers the JSON (`-F json`) output of `qstat`/`pbsnodes` and falls back to
   XML or text parsing so schedulers without newer flags continue to work.
 - **Automatic refresh** – updates every 30 seconds by default with a manual refresh binding
@@ -102,6 +128,7 @@ faster polling loop.
 | `q` | Quit the application   |
 | `r` | Refresh immediately    |
 | `g` | Focus the cluster grid |
+| `k` | Focus the rack grid    |
 | `j` | Focus the jobs table   |
 | `n` | Focus the nodes table  |
 | `u` | Focus the queues table |
