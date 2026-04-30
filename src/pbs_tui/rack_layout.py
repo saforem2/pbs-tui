@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Dict, List, Optional
 
 
 __all__ = [
     "NodeId",
     "parse_node_id",
+    "RackSpec",
+    "MachineLayout",
 ]
 
 
@@ -50,3 +52,24 @@ def parse_node_id(name: str) -> Optional[NodeId]:
 
     # No separator at all — treat the whole name as its own rack with one slot.
     return NodeId(rack=name, slot="0", raw=name)
+
+
+@dataclass(frozen=True)
+class RackSpec:
+    name: str
+    rows: int
+    cols: int
+
+    def capacity(self) -> int:
+        return self.rows * self.cols
+
+
+@dataclass(frozen=True)
+class MachineLayout:
+    name: str
+    rack_rows: List[List[str]]
+    rack_specs: Dict[str, RackSpec]
+    rack_slots: Dict[str, List[str]]
+
+    def all_racks(self) -> List[str]:
+        return [rack for row in self.rack_rows for rack in row]

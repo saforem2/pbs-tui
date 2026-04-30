@@ -24,3 +24,30 @@ from pbs_tui.rack_layout import NodeId, parse_node_id
 )
 def test_parse_node_id(name, expected):
     assert parse_node_id(name) == expected
+
+
+from pbs_tui.rack_layout import MachineLayout, RackSpec
+
+
+def test_rack_spec_construction():
+    spec = RackSpec(name="x4702", rows=7, cols=2)
+    assert spec.name == "x4702"
+    assert spec.rows == 7
+    assert spec.cols == 2
+
+
+def test_machine_layout_construction():
+    spec = RackSpec(name="x4702", rows=7, cols=2)
+    layout = MachineLayout(
+        name="aurora",
+        rack_rows=[["x4702", "x4703"]],
+        rack_specs={"x4702": spec, "x4703": spec},
+        rack_slots={
+            "x4702": [f"b{i:02d}" for i in range(14)],
+            "x4703": [f"b{i:02d}" for i in range(14)],
+        },
+    )
+    assert layout.name == "aurora"
+    assert layout.rack_rows == [["x4702", "x4703"]]
+    assert layout.rack_specs["x4702"].rows == 7
+    assert len(layout.rack_slots["x4702"]) == 14
