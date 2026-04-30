@@ -243,15 +243,19 @@ def build_render_model(
 # ---------------------------------------------------------------------------
 
 # Cell glyphs are chosen from East-Asian-width "Neutral" or "Narrow" only —
-# "Ambiguous" glyphs like ■/□/▤ render as 2 cells wide in many terminals
+# "Ambiguous" glyphs like ■/□ render as 2 cells wide in many terminals
 # (especially macOS Terminal with default fonts), which would clobber the
 # 2-column rack mini-grid layout.
+#
+# The shade-block trio █/▒/░ forms a natural visual progression and gives
+# every cell a real fill rather than a thin outline — much closer to the
+# coloured-blade look of the ALCF status page.
 CELL_GLYPHS: Dict[CellState, str] = {
-    CellState.OCCUPIED: "▮",   # BLACK VERTICAL RECTANGLE — colored per job
-    CellState.FREE: "▯",       # WHITE VERTICAL RECTANGLE — outline
-    CellState.DOWN: "x",       # ASCII x
+    CellState.OCCUPIED: "█",   # FULL BLOCK — colored per job
+    CellState.FREE: "░",       # LIGHT SHADE — sparse texture for empty slot
+    CellState.DOWN: "▒",       # MEDIUM SHADE — coarser texture
     CellState.UNKNOWN: "?",
-    CellState.RESERVATION: "%",  # ASCII percent — reservation marker
+    CellState.RESERVATION: "▓",  # DARK SHADE — heavier texture
     CellState.MISSING: " ",
 }
 
@@ -355,12 +359,16 @@ def render_to_text(
     for cell in model.cells_by_node.values():
         glyph = CELL_GLYPHS[cell.state]
         if cell.state == CellState.OCCUPIED and cell.owner_job_id in running_jobs:
-            # Job style is "on <hex>"; we want the colour as foreground for ■.
+            # Job style is "on <hex>"; we want the colour as foreground.
             base_style = _bg_to_fg(palette.job_style(running_jobs[cell.owner_job_id]))
         else:
             base_style = _state_style(cell.state, palette)
-        if selected_job_id and cell.owner_job_id == selected_job_id:
-            base_style = _invert_style(base_style)
+        if selected_job_id is not None:
+            if cell.owner_job_id == selected_job_id:
+                base_style = _invert_style(base_style)
+            else:
+                # Dim every non-selected cell so the selection stands out.
+                base_style = f"dim {base_style}"
         if 0 <= cell.row < model.height and 0 <= cell.col < model.width:
             chars[cell.row][cell.col] = glyph
             styles[cell.row][cell.col] = base_style
@@ -489,7 +497,7 @@ def render_job_list_entry(entry: JobListEntry, palette: Palette,
     style = palette.job_style(entry.palette_index)
     fg = style.replace("on ", "", 1) if style.startswith("on ") else style
     text = Text()
-    text.append("▮ ", style=fg)
+    text.append("█ ", style=fg)
     label = f"{entry.user} {entry.node_count}n {entry.queue}"
     if entry.time_remaining_str:
         label += f" [{entry.time_remaining_str}]"
