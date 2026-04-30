@@ -17,6 +17,14 @@ track workload health in real time.
 <td><img src="assets/racks-polaris.png" alt="Racks grid showing per-node utilization across the Polaris layout" /></td>
 <td><img src="assets/cluster-polaris.png" alt="Cluster grid showing proportional node utilization on Polaris" /></td>
 </tr>
+<tr>
+<th>Racks Grid (Aurora)</th>
+<th>Cluster Grid (Aurora)</th>
+</tr>
+<tr>
+<td><img src="assets/racks-aurora.png" alt="Racks grid showing per-node utilization across the Aurora layout" /></td>
+<td><img src="assets/cluster-aurora.png" alt="Cluster grid showing proportional node utilization on Aurora" /></td>
+</tr>
 </table>
 
 <details><summary>More views &amp; themes</summary>
