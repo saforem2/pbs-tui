@@ -596,3 +596,33 @@ def test_command_palette_includes_detail_toggle():
 
     asyncio.run(interact())
 
+
+def test_racks_focus_binding_exposed():
+    assert any(
+        binding[1] == "focus_racks" and binding[0] == "k"
+        for binding in PBSTUI.BINDINGS
+    )
+
+
+def test_app_includes_racks_tab():
+    snapshot = sample_snapshot(now=NOW)
+
+    class SingleSnapshotFetcher:
+        async def fetch_snapshot(self):
+            return snapshot
+
+    app = PBSTUI(fetcher=SingleSnapshotFetcher(), refresh_interval=9999)
+
+    async def interact() -> None:
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            from textual.widgets import TabbedContent
+            from pbs_tui.rack_grid import RackGridWidget
+            tabs = app.query_one(TabbedContent)
+            tab_ids = [pane.id for pane in tabs.query("TabPane")]
+            assert "racks_tab" in tab_ids
+            # Widget is mounted
+            assert app.query_one(RackGridWidget) is not None
+
+    asyncio.run(interact())
+
