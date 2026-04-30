@@ -28,32 +28,34 @@ track workload health in real time.
 </table>
 
 <details><summary>More views &amp; themes</summary>
+
 <table>
 <tr>
-<th>Cluster Grid</th>
-<th>Jobs Table</th>
+<th>Cluster Grid (dark)</th>
+<th>Jobs Table (dark)</th>
 </tr>
 <tr>
 <td><img src="assets/cluster-dark.png" alt="Cluster grid (dark)" /></td>
 <td><img src="assets/jobs-dark.png" alt="Jobs table (dark)" /></td>
 </tr>
 <tr>
+<th>Cluster Grid (light)</th>
+<th>Jobs Table (light)</th>
+</tr>
+<tr>
 <td><img src="assets/cluster-light.png" alt="Cluster grid (light)" /></td>
 <td><img src="assets/jobs-light.png" alt="Jobs table (light)" /></td>
 </tr>
-</table>
-
-<details><summary>More themes</summary>
-<table>
 <tr>
-<th>Catppuccin</th>
-<th>One Dark</th>
+<th>Cluster Grid (Catppuccin)</th>
+<th>Cluster Grid (One Dark)</th>
 </tr>
 <tr>
 <td><img src="assets/cluster-catppuccin.png" alt="Cluster grid (catppuccin)" /></td>
 <td><img src="assets/cluster-onedark.png" alt="Cluster grid (onedark)" /></td>
 </tr>
 </table>
+
 </details>
 
 
