@@ -266,18 +266,32 @@ def _bg_to_fg(style: str) -> str:
     return style.replace("on ", "", 1) if style.startswith("on ") else style
 
 
+# Foreground style for free / down / unknown / reservation cells.  These need
+# a fixed muted color that is visible against the surface background; the
+# cluster_grid palette's empty_style is a "<near-bg> on <bg>" pair tuned for
+# block-fill rendering and would be invisible if used directly here.
+_FREE_FG = "color(244)"
+_DOWN_FG = "color(248)"
+_UNKNOWN_FG = "color(248)"
+_RESERVATION_FG = "color(140)"
+
+
 def _state_style(state: CellState, palette: Palette) -> str:
-    """Foreground style for a non-occupied cell."""
+    """Foreground style for a non-occupied cell.
+
+    *palette* is accepted for symmetry with the occupied-cell branch but
+    intentionally not used; the cluster_grid palette's empty colour is a
+    background-fill pair that doesn't translate to a foreground glyph.
+    """
     if state == CellState.FREE:
-        # Muted empty-square outline derived from the empty palette colour.
-        return _bg_to_fg(palette.empty_style)
+        return _FREE_FG
     if state == CellState.DOWN:
-        return "color(244)"
+        return _DOWN_FG
     if state == CellState.UNKNOWN:
-        return "dim"
+        return _UNKNOWN_FG
     if state == CellState.RESERVATION:
-        return "color(140)"
-    return _bg_to_fg(palette.empty_style)
+        return _RESERVATION_FG
+    return _FREE_FG
 
 
 def _invert_style(base_style: str) -> str:
@@ -377,13 +391,13 @@ def build_legend_text() -> Text:
     legend = Text()
     legend.append(CELL_GLYPHS[CellState.OCCUPIED], style="bold")
     legend.append(" job  ")
-    legend.append(CELL_GLYPHS[CellState.FREE], style="dim")
+    legend.append(CELL_GLYPHS[CellState.FREE], style=_FREE_FG)
     legend.append(" free  ")
-    legend.append(CELL_GLYPHS[CellState.DOWN], style="color(244)")
+    legend.append(CELL_GLYPHS[CellState.DOWN], style=_DOWN_FG)
     legend.append(" down  ")
-    legend.append(CELL_GLYPHS[CellState.UNKNOWN], style="dim")
+    legend.append(CELL_GLYPHS[CellState.UNKNOWN], style=_UNKNOWN_FG)
     legend.append(" unknown  ")
-    legend.append(CELL_GLYPHS[CellState.RESERVATION], style="color(140)")
+    legend.append(CELL_GLYPHS[CellState.RESERVATION], style=_RESERVATION_FG)
     legend.append(" reservation  ")
     legend.append("(click a cell to select its job)", style="dim")
     return legend
