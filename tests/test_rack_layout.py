@@ -180,9 +180,112 @@ def test_polaris_takes_precedence_over_aurora_when_majority():
 
 
 def test_generic_caps_rack_rows_at_sixteen():
-    # 1000 slots in one rack → cols = 32, rows capped at 16
+    # 1000 slots in one rack → rows capped at 16, cols widened so capacity >= 1000
     names = [f"big-{i:04d}" for i in range(1000)]
     layout = detect_layout(names)
     spec = layout.rack_specs["big"]
     assert spec.rows == 16
     assert spec.cols >= 32
+
+
+# ---------------------------------------------------------------------------
+# Bug-fix regression tests
+# ---------------------------------------------------------------------------
+
+import re as _re
+from pbs_tui.rack_layout import _AURORA_RACK_PATTERN
+
+
+def test_aurora_regex_no_longer_matches_x4900():
+    """Tightened regex must not match racks outside the x40-x47 curated grid."""
+    # x4900 is row-prefix x49, which is outside the curated x40-x47 range.
+    assert not _AURORA_RACK_PATTERN.match("x4900")
+    # x4800 likewise is outside x40-x47.
+    assert not _AURORA_RACK_PATTERN.match("x4800")
+    # Original curated racks must still match.
+    assert _AURORA_RACK_PATTERN.match("x4000")
+    assert _AURORA_RACK_PATTERN.match("x4720")
+    assert _AURORA_RACK_PATTERN.match("x4720")
+    assert _AURORA_RACK_PATTERN.match("x4020")
+
+
+def test_detect_aurora_includes_unmapped_racks_in_overflow_row():
+    """Aurora-pattern racks outside the curated 00-20 range go to an overflow row.
+
+    x4721 is col 21 — one past the curated x4700..x4720 range — so it must
+    appear in an overflow row appended after the 8 curated rows.
+    """
+    # Mostly curated Aurora names (one curated rack with 64 nodes)
+    curated_names = [
+        f"x4702c{c}s{s}b0n0" for c in range(8) for s in range(8)
+    ]
+    # One uncurated rack: col 21 of the x47 row
+    uncurated_names = ["x4721c0s0b0n0"]
+    layout = detect_layout(curated_names + uncurated_names)
+
+    assert layout.name == "aurora"
+    # The curated layout has 8 row-prefixes; the overflow row makes 9.
+    assert len(layout.rack_rows) == 9
+    overflow_row = layout.rack_rows[-1]
+    assert "x4721" in overflow_row
+    # The unmapped rack must have a spec and populated slot list.
+    assert "x4721" in layout.rack_specs
+    assert layout.rack_slots["x4721"] == ["x4721c0s0b0n0"]
+
+
+def test_detect_aurora_includes_x4900_via_overflow_helper():
+    """x4900 doesn't match the tightened Aurora pattern, so it lands in the
+    _with_overflow_racks overflow row (not the _build_aurora_layout overflow).
+    """
+    # Mostly curated Aurora names so detection picks aurora.
+    curated_names = [
+        f"x4702c{c}s{s}b0n0" for c in range(8) for s in range(8)
+    ]
+    # x4900 doesn't match _AURORA_RACK_PATTERN; it will be caught by
+    # _with_overflow_racks after aurora wins the ratio test.
+    minority_name = "x4900c0s0b0n0"
+    layout = detect_layout(curated_names + [minority_name])
+
+    assert layout.name == "aurora"
+    # x4900 must be reachable in rack_slots (either in an overflow row or curated row).
+    assert "x4900" in layout.rack_slots
+    assert minority_name in layout.rack_slots["x4900"]
+
+
+def test_detect_layout_preserves_minority_cluster_in_overflow():
+    """Mixed Aurora-majority / Polaris-minority snapshot: Polaris nodes must not be dropped.
+
+    Aurora wins the 80% vote; Polaris racks (x3001) are unknown to the Aurora
+    curated layout, so _with_overflow_racks appends them as an overflow row.
+    """
+    # 90 Aurora nodes in one curated rack
+    aurora_names = [
+        f"x4702c{c}s{s}b0n0" for c in range(8) for s in range(8)
+    ]  # 64 names
+    # 7 Polaris nodes in x3001 (well below 80% threshold individually)
+    polaris_names = [f"x3001c0s{s}b0n0" for s in range(7)]
+
+    layout = detect_layout(aurora_names + polaris_names)
+
+    assert layout.name == "aurora"
+    # Polaris rack must appear in rack_slots so its nodes will render.
+    assert "x3001" in layout.rack_slots
+    assert len(layout.rack_slots["x3001"]) == 7
+    # Confirm all polaris names are present.
+    assert set(layout.rack_slots["x3001"]) == set(polaris_names)
+
+
+def test_generic_layout_capacity_sufficient_for_all_nodes():
+    """Generic layout must not drop nodes when n > rows * cols before the fix.
+
+    With n=1000, the old code produced cols=32, rows=min(16, ceil(1000/32))=16,
+    giving capacity 512 — 488 nodes dropped.  The fix widens cols so
+    capacity >= n.
+    """
+    names = [f"bigcluster-{i:04d}" for i in range(1000)]
+    layout = detect_layout(names)
+    spec = layout.rack_specs["bigcluster"]
+    # capacity must cover every node
+    assert spec.capacity() >= 1000
+    # slots list must contain all 1000 unique names
+    assert len(layout.rack_slots["bigcluster"]) == 1000

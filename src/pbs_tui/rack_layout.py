@@ -36,7 +36,11 @@ _ALCF_PATTERN = re.compile(r"^(x\d{4})c(\d+)s(\d+)b(\d+)n(\d+)$")
 
 # Polaris racks are x30xx, x31xx, x32xx; Aurora racks are x40xx-x47xx.
 _POLARIS_RACK_PATTERN = re.compile(r"^x3\d{3}$")
-_AURORA_RACK_PATTERN = re.compile(r"^x[4-7]\d{3}$")
+# Aurora racks match the curated x40NN–x47NN grid (8 row-prefixes × 21 racks).
+# Using x4[0-7] ensures detection only fires for racks the layout actually
+# enumerates; broader patterns like x[4-7]\d{3} would match x50xx etc. which
+# are neither curated nor displayed, causing silent node drops.
+_AURORA_RACK_PATTERN = re.compile(r"^x4[0-7]\d{2}$")
 
 # Generic last-dash split, e.g. "nodeA-01" -> rack="nodeA", slot="01".
 _GENERIC_DASH_PATTERN = re.compile(r"^(.*)-([^-]+)$")
@@ -152,6 +156,21 @@ def _build_aurora_layout(node_names: Iterable[str]) -> MachineLayout:
             # doesn't mention).
             rack_slots[name] = rack_to_nodes.get(name, [])
         rack_rows.append(row)
+
+    # Overflow row — any Aurora-pattern racks that the curated x40NN..x47NN
+    # grid doesn't enumerate (e.g. x4721 is col 21, which is beyond the
+    # 00..20 range).  Append them right-to-left to match Aurora's display
+    # convention so they remain visible rather than being silently dropped.
+    curated_rack_names = set(rack_specs.keys())
+    overflow_row: List[str] = []
+    for rack_name in sorted(rack_to_nodes.keys(), reverse=True):
+        if rack_name not in curated_rack_names:
+            overflow_row.append(rack_name)
+            rack_specs[rack_name] = RackSpec(name=rack_name, rows=rows, cols=cols)
+            rack_slots[rack_name] = rack_to_nodes[rack_name]
+    if overflow_row:
+        rack_rows.append(overflow_row)
+
     return MachineLayout(
         name="aurora",
         rack_rows=rack_rows,
@@ -248,14 +267,75 @@ def _alcf_rack_ratios(node_names: Iterable[str]) -> tuple[float, float]:
     return aurora / total, polaris / total
 
 
+def _with_overflow_racks(layout: MachineLayout, observed_names: List[str]) -> MachineLayout:
+    """Return *layout* augmented with an overflow row for any nodes not already
+    mapped.
+
+    When a curated layout (aurora / polaris) wins the detection vote, nodes
+    from the minority cluster are not present in ``layout.rack_slots``.  This
+    helper groups them by their parsed rack name and appends them as an extra
+    "unmapped" row at the bottom of the layout so they remain visible.
+
+    Because :class:`MachineLayout` is ``frozen=True``, a new instance is built
+    with the augmented data rather than mutating the existing one.
+    """
+    # Collect names that parsed OK but have no slot entry in the layout.
+    overflow_rack_to_nodes: Dict[str, List[str]] = {}
+    for name in observed_names:
+        node = parse_node_id(name)
+        if node is None:
+            continue
+        if name in layout.rack_slots.get(node.rack, []):
+            continue
+        if node.rack in layout.rack_slots:
+            # The rack is known but this particular name is absent — already
+            # represented by the curated layout (e.g. an empty curated rack).
+            continue
+        overflow_rack_to_nodes.setdefault(node.rack, []).append(name)
+
+    if not overflow_rack_to_nodes:
+        return layout  # no overflow — nothing to do
+
+    # Use the same per-rack grid shape for all overflow racks so dimensions
+    # are consistent.
+    max_n = max(len(v) for v in overflow_rack_to_nodes.values())
+    cols = max(1, math.ceil(math.sqrt(max_n)))
+    rows = max(1, math.ceil(max_n / cols))
+
+    new_specs = dict(layout.rack_specs)
+    new_slots = dict(layout.rack_slots)
+    overflow_row: List[str] = []
+    for rack_name in sorted(overflow_rack_to_nodes):
+        nodes = sorted(overflow_rack_to_nodes[rack_name],
+                       key=lambda n: (parse_node_id(n) or NodeId(rack_name, "", n)).slot)
+        new_specs[rack_name] = RackSpec(name=rack_name, rows=rows, cols=cols)
+        new_slots[rack_name] = nodes
+        overflow_row.append(rack_name)
+
+    new_rows = list(layout.rack_rows) + [overflow_row]
+    return MachineLayout(
+        name=layout.name,
+        rack_rows=new_rows,
+        rack_specs=new_specs,
+        rack_slots=new_slots,
+    )
+
+
 def detect_layout(node_names: Iterable[str]) -> MachineLayout:
-    """Return the best-matching :class:`MachineLayout` for *node_names*."""
+    """Return the best-matching :class:`MachineLayout` for *node_names*.
+
+    Any nodes whose rack is not captured by the winning curated layout are
+    appended to an overflow row at the bottom so they remain visible rather
+    than being silently dropped.
+    """
     names = [n for n in node_names if n]
     aurora_ratio, polaris_ratio = _alcf_rack_ratios(names)
     if aurora_ratio >= 0.80:
-        return _build_aurora_layout(names)
+        layout = _build_aurora_layout(names)
+        return _with_overflow_racks(layout, names)
     if polaris_ratio >= 0.80:
-        return _build_polaris_layout(names)
+        layout = _build_polaris_layout(names)
+        return _with_overflow_racks(layout, names)
     return _build_generic_layout(names)
 
 
@@ -276,7 +356,10 @@ def _build_generic_layout(names: List[str]) -> MachineLayout:
         unique = list(dict.fromkeys(node_names))
         n = len(unique)
         cols = max(1, math.ceil(math.sqrt(n)))
-        rows = min(16, max(1, math.ceil(n / cols)))
+        rows = max(1, math.ceil(n / cols))
+        if rows > 16:
+            rows = 16
+            cols = max(cols, math.ceil(n / rows))
         rack_specs[rack] = RackSpec(name=rack, rows=rows, cols=cols)
         rack_slots[rack] = unique
 
