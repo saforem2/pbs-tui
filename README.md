@@ -10,6 +10,18 @@ track workload health in real time.
 
 <table>
 <tr>
+<th>Racks Grid (Polaris)</th>
+<th>Cluster Grid (Polaris)</th>
+</tr>
+<tr>
+<td><img src="assets/racks-polaris.png" alt="Racks grid showing per-node utilization across the Polaris layout" /></td>
+<td><img src="assets/cluster-polaris.png" alt="Cluster grid showing proportional node utilization on Polaris" /></td>
+</tr>
+</table>
+
+<details><summary>More views &amp; themes</summary>
+<table>
+<tr>
 <th>Cluster Grid</th>
 <th>Jobs Table</th>
 </tr>
