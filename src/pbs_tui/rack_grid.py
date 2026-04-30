@@ -30,10 +30,10 @@ from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Static
 
-from .cluster_grid import Palette  # re-use job-color palette
+from .cluster_grid import Palette, _build_palette, AGGREGATED_QUEUES  # re-use job-color palette
 from .data import Job, Node, SchedulerSnapshot
-from .nodes import job_node_summary
-from .rack_layout import MachineLayout, RackSpec, parse_node_id
+from .nodes import job_node_summary, job_node_assignments
+from .rack_layout import MachineLayout, RackSpec, parse_node_id, detect_layout
 from .time_utils import format_remaining, time_remaining
 
 
@@ -51,6 +51,7 @@ __all__ = [
     "JobListEntry",
     "build_job_list_entries",
     "render_job_list_entry",
+    "RackGridWidget",
 ]
 
 
@@ -604,3 +605,139 @@ class _JobListWidget(Widget):
             self._rebuild_content()
             self.refresh()
             self.post_message(self.JobChosen(self._entries[row].job_id))
+
+
+# ---------------------------------------------------------------------------
+# Public composite widget
+# ---------------------------------------------------------------------------
+
+from textual.containers import Horizontal, Vertical
+
+
+class RackGridWidget(Vertical):
+    """Public Racks-tab widget."""
+
+    DEFAULT_CSS = """
+    RackGridWidget {
+        height: 1fr;
+        padding: 1 2;
+    }
+    RackGridWidget _RackHeader { height: auto; }
+    RackGridWidget _RackLegend { height: auto; margin-top: 1; }
+    RackGridWidget Horizontal { height: 1fr; }
+    """
+
+    class JobSelected(Message):
+        def __init__(self, job_id: str) -> None:
+            super().__init__()
+            self.job_id = job_id
+
+    class NodeSelected(Message):
+        def __init__(self, node_name: str) -> None:
+            super().__init__()
+            self.node_name = node_name
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._snapshot: Optional[SchedulerSnapshot] = None
+        self._selected_job_id: Optional[str] = None
+        self._rack_filter: Optional[str] = None
+
+    def compose(self):
+        yield _RackHeader(id="rack_header")
+        with Horizontal():
+            yield _RackPanel(id="rack_panel")
+            yield _JobListWidget(id="rack_job_list")
+        yield _RackLegend(id="rack_legend")
+
+    # ── public API ───────────────────────────────────────────────
+
+    def update_from_snapshot(self, snapshot: SchedulerSnapshot) -> None:
+        self._snapshot = snapshot
+        # Drop selection if the job is no longer running
+        assignments = job_node_assignments(snapshot)
+        if self._selected_job_id and self._selected_job_id not in assignments:
+            self._selected_job_id = None
+        self._rebuild()
+
+    # ── internal ─────────────────────────────────────────────────
+
+    def _rebuild(self) -> None:
+        if self._snapshot is None:
+            return
+        snap = self._snapshot
+        node_names = [n.name for n in snap.nodes]
+        layout = detect_layout(node_names)
+        assignments = job_node_assignments(snap)
+        # Palette index per job — sort by job_id for stable assignment
+        sorted_running = sorted(j for j in assignments.keys())
+        palette_index = {jid: i for i, jid in enumerate(sorted_running)}
+
+        # Build palette using the same job_count we used in cluster_grid
+        try:
+            theme_vars = self.app.get_css_variables()
+            theme_name = self.app.theme or ""
+        except Exception:
+            theme_vars, theme_name = {}, ""
+        palette = _build_palette(
+            theme_vars, theme_name=theme_name, job_count=len(sorted_running)
+        )
+
+        model = build_render_model(layout, snap, job_assignments=assignments)
+        text = render_to_text(
+            model,
+            palette=palette,
+            running_jobs=palette_index,
+            selected_job_id=self._selected_job_id,
+        )
+
+        self.query_one(_RackHeader).update(build_header_text(layout, snap, assignments))
+        self.query_one(_RackPanel).update(text, model)
+
+        entries = build_job_list_entries(
+            snap, assignments,
+            palette_index=palette_index,
+            rack_filter=self._rack_filter,
+        )
+        self.query_one(_JobListWidget).update(
+            entries, palette,
+            selected_id=self._selected_job_id,
+            rack_filter=self._rack_filter,
+        )
+        self.query_one(_RackLegend).update(build_legend_text())
+
+    # ── message handlers ────────────────────────────────────────
+
+    def on__rack_panel_cell_clicked(self, event: "_RackPanel.CellClicked") -> None:
+        if event.node_name:
+            # If the cell belongs to a running job, select that job; else node
+            assignments = job_node_assignments(self._snapshot) if self._snapshot else {}
+            owning_job = next(
+                (jid for jid, ns in assignments.items() if event.node_name in ns),
+                None,
+            )
+            if owning_job:
+                self._selected_job_id = owning_job
+                self.post_message(self.JobSelected(owning_job))
+            else:
+                self.post_message(self.NodeSelected(event.node_name))
+        elif event.rack_name:
+            # Toggle / switch the rack filter
+            self._rack_filter = (
+                None if self._rack_filter == event.rack_name else event.rack_name
+            )
+        self._rebuild()
+
+    def on__job_list_widget_job_chosen(
+        self, event: "_JobListWidget.JobChosen"
+    ) -> None:
+        self._selected_job_id = event.job_id
+        self.post_message(self.JobSelected(event.job_id))
+        self._rebuild()
+
+    def on__job_list_widget_filter_cleared(
+        self, event: "_JobListWidget.FilterCleared"
+    ) -> None:
+        self._rack_filter = None
+        self._selected_job_id = None
+        self._rebuild()
