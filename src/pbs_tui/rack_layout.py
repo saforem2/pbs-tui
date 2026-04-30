@@ -27,14 +27,16 @@ __all__ = [
 ]
 
 
-# Aurora node name format: "x[rack4]-b[slot2]" e.g. "x4702-b07"
-_AURORA_PATTERN = re.compile(r"^(x[34]\d{3})-(b\d{2})$")
+# ALCF cabinet hostnames share the format "x[rack4]c[chassis]s[slot]b[blade]n[node]"
+# (e.g. Aurora "x4000c0s0b0n0", Polaris "x3005c0s7b0n0").  The rack id is the
+# leading "xRRRR" and the position within the rack is captured as (chassis,
+# slot, blade, node) so visually-adjacent nodes (same slot, different blade)
+# get distinct, sortable slot ids in our layout.
+_ALCF_PATTERN = re.compile(r"^(x\d{4})c(\d+)s(\d+)b(\d+)n(\d+)$")
 
-# Polaris node name format: "x[rack4]c[chassis]s[slot]b[blade]n[node]"
-# e.g. "x3005c0s7b0n0".  The rack id is the leading "x3\d{3}" and the position
-# within rack is captured as (chassis, slot, blade, node) so visually-adjacent
-# nodes (same slot, different blade) get distinct slot ids in our layout.
-_POLARIS_PATTERN = re.compile(r"^(x3\d{3})c(\d+)s(\d+)b(\d+)n(\d+)$")
+# Polaris racks are x30xx, x31xx, x32xx; Aurora racks are x40xx-x47xx.
+_POLARIS_RACK_PATTERN = re.compile(r"^x3\d{3}$")
+_AURORA_RACK_PATTERN = re.compile(r"^x[4-7]\d{3}$")
 
 # Generic last-dash split, e.g. "nodeA-01" -> rack="nodeA", slot="01".
 _GENERIC_DASH_PATTERN = re.compile(r"^(.*)-([^-]+)$")
@@ -53,12 +55,9 @@ def parse_node_id(name: str) -> Optional[NodeId]:
         return None
     name = name.strip()
 
-    if m := _AURORA_PATTERN.match(name):
-        return NodeId(rack=m.group(1), slot=m.group(2), raw=name)
-
-    if m := _POLARIS_PATTERN.match(name):
+    if m := _ALCF_PATTERN.match(name):
         # Encode (chassis, slot, blade, node) into a single sortable slot id
-        # so that all nodes within a rack get unique ordering keys.
+        # so that all nodes within a rack get unique, ordered keys.
         chassis, slot, blade, node = (int(g) for g in m.groups()[1:])
         return NodeId(
             rack=m.group(1),
@@ -105,27 +104,53 @@ class MachineLayout:
 
 # Aurora curated layout — rack rows listed top-to-bottom with descending row
 # prefix (x47XX above x46XX, etc.) to mirror the ALCF status page.
-# Each rack row has 21 racks numbered xRR00..xRR20.
+# Each rack row has 21 racks numbered xRR00..xRR20.  Aurora racks are
+# extremely dense (~64 nodes per rack = 8 chassis x 8 nodes), so we use a
+# wider grid shape than Polaris.
 _AURORA_ROW_PREFIXES = ("x47", "x46", "x45", "x44", "x43", "x42", "x41", "x40")
-_AURORA_RACK_COLS = 21  # racks numbered 00..20 within each row
-_AURORA_RACK_SHAPE = (7, 2)  # rows x cols of blades per rack
+_AURORA_RACK_COLS_PER_ROW = 21  # racks numbered 00..20 within each row
 
 
-def _build_aurora_layout() -> MachineLayout:
+def _build_aurora_layout(node_names: Iterable[str]) -> MachineLayout:
+    """Build the Aurora layout, populating each rack's slot list from
+    *node_names* so the renderer sees the real hostnames.
+
+    Aurora hostnames share the ALCF "xRRRRcCsSbBnN" format with Polaris;
+    only the rack-id prefix distinguishes them (x40-x47 vs x30-x32).
+    """
+    # Group observed Aurora node names by rack.
+    rack_to_nodes: Dict[str, List[str]] = {}
+    for name in node_names:
+        if not name:
+            continue
+        m = _ALCF_PATTERN.match(name)
+        if m is None or not _AURORA_RACK_PATTERN.match(m.group(1)):
+            continue
+        rack = m.group(1)
+        rack_to_nodes.setdefault(rack, []).append(name)
+    for nodes in rack_to_nodes.values():
+        nodes.sort(key=lambda n: parse_node_id(n).slot)  # type: ignore[union-attr]
+
+    # Use the largest observed rack to size every rack's mini-grid so racks
+    # share dimensions.  Aurora-style chassis layouts are roughly 2:1 wide,
+    # so prefer cols >= rows.
+    max_n = max((len(v) for v in rack_to_nodes.values()), default=64)
+    cols = max(2, math.ceil(math.sqrt(max_n * 2)))
+    rows = max(1, math.ceil(max_n / cols))
+
     rack_rows: List[List[str]] = []
     rack_specs: Dict[str, RackSpec] = {}
     rack_slots: Dict[str, List[str]] = {}
-    n_slots = _AURORA_RACK_SHAPE[0] * _AURORA_RACK_SHAPE[1]
     for prefix in _AURORA_ROW_PREFIXES:
         row: List[str] = []
-        for col in range(_AURORA_RACK_COLS):
+        for col in range(_AURORA_RACK_COLS_PER_ROW):
             name = f"{prefix}{col:02d}"
             row.append(name)
-            rack_specs[name] = RackSpec(
-                name=name, rows=_AURORA_RACK_SHAPE[0], cols=_AURORA_RACK_SHAPE[1]
-            )
-            # Aurora node names: "x4702-b07"
-            rack_slots[name] = [f"{name}-b{i:02d}" for i in range(n_slots)]
+            rack_specs[name] = RackSpec(name=name, rows=rows, cols=cols)
+            # Use observed nodes if present, else empty list (renders as
+            # all-MISSING cells, which is correct for racks the snapshot
+            # doesn't mention).
+            rack_slots[name] = rack_to_nodes.get(name, [])
         rack_rows.append(row)
     return MachineLayout(
         name="aurora",
@@ -133,9 +158,6 @@ def _build_aurora_layout() -> MachineLayout:
         rack_specs=rack_specs,
         rack_slots=rack_slots,
     )
-
-
-_AURORA_LAYOUT = _build_aurora_layout()
 
 
 # Polaris curated layout — three rack rows with descending suffix columns
@@ -168,10 +190,11 @@ def _build_polaris_layout(node_names: Iterable[str]) -> MachineLayout:
     for name in node_names:
         if not name:
             continue
-        node = parse_node_id(name)
-        if node is None or not _POLARIS_PATTERN.match(name):
+        m = _ALCF_PATTERN.match(name)
+        if m is None or not _POLARIS_RACK_PATTERN.match(m.group(1)):
             continue
-        rack_to_nodes.setdefault(node.rack, []).append(name)
+        rack = m.group(1)
+        rack_to_nodes.setdefault(rack, []).append(name)
     for nodes in rack_to_nodes.values():
         nodes.sort(key=lambda n: parse_node_id(n).slot)  # type: ignore[union-attr]
 
@@ -207,29 +230,32 @@ def _build_polaris_layout(node_names: Iterable[str]) -> MachineLayout:
     )
 
 
-def _aurora_match_ratio(node_names: Iterable[str]) -> float:
+def _alcf_rack_ratios(node_names: Iterable[str]) -> tuple[float, float]:
+    """Return (aurora_ratio, polaris_ratio) for *node_names*."""
     names = [n for n in node_names if n]
     if not names:
-        return 0.0
-    matches = sum(1 for n in names if _AURORA_PATTERN.match(n))
-    return matches / len(names)
-
-
-def _polaris_match_ratio(node_names: Iterable[str]) -> float:
-    names = [n for n in node_names if n]
-    if not names:
-        return 0.0
-    matches = sum(1 for n in names if _POLARIS_PATTERN.match(n))
-    return matches / len(names)
+        return 0.0, 0.0
+    aurora = polaris = 0
+    for name in names:
+        if (m := _ALCF_PATTERN.match(name)) is None:
+            continue
+        rack = m.group(1)
+        if _AURORA_RACK_PATTERN.match(rack):
+            aurora += 1
+        elif _POLARIS_RACK_PATTERN.match(rack):
+            polaris += 1
+    total = len(names)
+    return aurora / total, polaris / total
 
 
 def detect_layout(node_names: Iterable[str]) -> MachineLayout:
     """Return the best-matching :class:`MachineLayout` for *node_names*."""
     names = [n for n in node_names if n]
-    if _polaris_match_ratio(names) >= 0.80:
+    aurora_ratio, polaris_ratio = _alcf_rack_ratios(names)
+    if aurora_ratio >= 0.80:
+        return _build_aurora_layout(names)
+    if polaris_ratio >= 0.80:
         return _build_polaris_layout(names)
-    if _aurora_match_ratio(names) >= 0.80:
-        return _AURORA_LAYOUT
     return _build_generic_layout(names)
 
 

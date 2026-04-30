@@ -10,9 +10,19 @@ from pbs_tui.rack_layout import NodeId, parse_node_id
 @pytest.mark.parametrize(
     "name, expected",
     [
-        ("x4702-b07", NodeId(rack="x4702", slot="b07", raw="x4702-b07")),
-        ("x3001-b00", NodeId(rack="x3001", slot="b00", raw="x3001-b00")),
-        ("x4720-b13", NodeId(rack="x4720", slot="b13", raw="x4720-b13")),
+        # ALCF cabinet hostnames (Aurora + Polaris share the format)
+        (
+            "x4702c0s7b0n0",
+            NodeId(rack="x4702", slot="c0s07b0n0", raw="x4702c0s7b0n0"),
+        ),
+        (
+            "x3001c0s0b0n0",
+            NodeId(rack="x3001", slot="c0s00b0n0", raw="x3001c0s0b0n0"),
+        ),
+        (
+            "x4720c0s13b1n0",
+            NodeId(rack="x4720", slot="c0s13b1n0", raw="x4720c0s13b1n0"),
+        ),
         # Generic fallback — last "-" splits rack/slot
         ("nodeA-01", NodeId(rack="nodeA", slot="01", raw="nodeA-01")),
         # Pure-name fallback — single token becomes its own rack
@@ -57,30 +67,35 @@ from pbs_tui.rack_layout import detect_layout
 
 
 def test_detect_aurora_layout_from_node_names():
-    # 14 Aurora-pattern names + 0 others — well above the 80% threshold
-    names = [f"x4702-b{i:02d}" for i in range(14)]
+    # 64 Aurora-pattern names in a single rack — well above the 80% threshold
+    names = [
+        f"x4702c{c}s{s}b{b}n0"
+        for c in range(8) for s in range(8) for b in range(1)
+    ]
     layout = detect_layout(names)
     assert layout.name == "aurora"
     # Aurora curated rack rows are listed top-down with descending row prefix
     # (x47XX above x46XX above ...). x4702 is in the top row.
     top_row = layout.rack_rows[0]
     assert "x4702" in top_row
-    # Each Aurora rack has 14 slots arranged 2 cols x 7 rows
-    assert layout.rack_specs["x4702"].cols == 2
-    assert layout.rack_specs["x4702"].rows == 7
-    # rack_slots stores full node names so the renderer can look them up directly
-    assert layout.rack_slots["x4702"] == [f"x4702-b{i:02d}" for i in range(14)]
+    # 8 rack rows, 21 racks per row
+    assert len(layout.rack_rows) == 8
+    assert all(len(row) == 21 for row in layout.rack_rows)
+    # rack_slots stores the full observed node names for x4702
+    assert len(layout.rack_slots["x4702"]) == 64
 
 
 def test_detect_aurora_layout_includes_empty_racks():
     # Single observed rack — curated layout should still enumerate every rack
-    names = ["x4702-b00"]
+    names = ["x4702c0s0b0n0"]
     layout = detect_layout(names)
     assert layout.name == "aurora"
-    # Layout must contain more than the one observed rack
-    assert len(layout.all_racks()) > 1
+    # Layout must contain all 8 * 21 = 168 racks
+    assert len(layout.all_racks()) == 168
     # The observed rack must be present in the curated rows
     assert "x4702" in layout.all_racks()
+    # Empty racks render with no observed nodes (renderer treats them as MISSING)
+    assert layout.rack_slots["x4000"] == []
 
 
 def test_detect_generic_layout_for_unknown_names():
