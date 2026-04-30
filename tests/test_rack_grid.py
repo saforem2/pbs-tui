@@ -49,8 +49,8 @@ def _two_rack_layout() -> MachineLayout:
         rack_rows=[["r1", "r2"]],
         rack_specs={"r1": spec, "r2": RackSpec(name="r2", rows=2, cols=2)},
         rack_slots={
-            "r1": ["a", "b", "c", "d"],
-            "r2": ["a", "b", "c", "d"],
+            "r1": ["r1-a", "r1-b", "r1-c", "r1-d"],
+            "r2": ["r2-a", "r2-b", "r2-c", "r2-d"],
         },
     )
 

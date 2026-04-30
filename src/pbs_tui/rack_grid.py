@@ -175,10 +175,20 @@ def build_render_model(
 
     cursor_y = 0
     total_width = 0
+    # Use the layout's largest rack-box width so empty placeholders advance the
+    # cursor by the same step as a real rack (keeps right-aligned rows aligned).
+    max_box_width = max(
+        (_rack_box_size(s)[0] for s in layout.rack_specs.values()),
+        default=0,
+    )
     for rack_row in layout.rack_rows:
         cursor_x = 0
         row_height = 0
         for rack in rack_row:
+            if not rack:
+                # Empty placeholder — reserve space, no rack rendered here.
+                cursor_x += max_box_width + RACK_HORIZONTAL_PAD
+                continue
             spec = layout.rack_specs[rack]
             box_w, box_h = _rack_box_size(spec)
             placement = RackPlacement(
@@ -189,12 +199,11 @@ def build_render_model(
 
             slots = layout.rack_slots[rack]
             inner_top = cursor_y + RACK_LABEL_LINES + RACK_UTIL_LINES
-            for idx, slot in enumerate(slots):
+            for idx, node_name in enumerate(slots):
                 if idx >= spec.capacity():
                     break
                 rr = inner_top + idx // spec.cols
                 cc = cursor_x + idx % spec.cols
-                node_name = f"{rack}-{slot}"
                 node = node_by_name.get(node_name)
                 owner = node_to_job.get(node_name)
                 cell = Cell(

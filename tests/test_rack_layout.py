@@ -68,7 +68,8 @@ def test_detect_aurora_layout_from_node_names():
     # Each Aurora rack has 14 slots arranged 2 cols x 7 rows
     assert layout.rack_specs["x4702"].cols == 2
     assert layout.rack_specs["x4702"].rows == 7
-    assert layout.rack_slots["x4702"] == [f"b{i:02d}" for i in range(14)]
+    # rack_slots stores full node names so the renderer can look them up directly
+    assert layout.rack_slots["x4702"] == [f"x4702-b{i:02d}" for i in range(14)]
 
 
 def test_detect_aurora_layout_includes_empty_racks():
@@ -109,6 +110,45 @@ def test_detect_empty_layout_returns_generic_with_no_racks():
     layout = detect_layout([])
     assert layout.name == "generic"
     assert layout.all_racks() == []
+
+
+def test_parse_node_id_polaris():
+    """Polaris hostnames look like x3005c0s7b0n0."""
+    from pbs_tui.rack_layout import parse_node_id, NodeId
+    assert parse_node_id("x3005c0s7b0n0") == NodeId(
+        rack="x3005", slot="s07", raw="x3005c0s7b0n0"
+    )
+    # Two-digit slot
+    assert parse_node_id("x3112c0s13b0n0") == NodeId(
+        rack="x3112", slot="s13", raw="x3112c0s13b0n0"
+    )
+
+
+def test_detect_polaris_layout_from_node_names():
+    """A snapshot of Polaris-pattern names returns the curated polaris layout."""
+    names = [f"x3001c0s{i}b0n0" for i in range(14)]
+    layout = detect_layout(names)
+    assert layout.name == "polaris"
+    # Three rack rows: 16 / 12 / 12
+    assert len(layout.rack_rows) == 3
+    real_per_row = [sum(1 for r in row if r) for row in layout.rack_rows]
+    assert real_per_row == [16, 12, 12]
+    # Rows 2 and 3 are right-aligned with 4 leading blanks
+    blanks_per_row = [sum(1 for r in row if not r) for row in layout.rack_rows]
+    assert blanks_per_row == [0, 4, 4]
+    # Display order is right-to-left within each row
+    assert layout.rack_rows[0][0] == "x3016"   # leftmost is highest
+    assert layout.rack_rows[0][-1] == "x3001"  # rightmost is lowest
+    # rack_slots stores full Polaris node names
+    assert layout.rack_slots["x3001"][0] == "x3001c0s0b0n0"
+    assert len(layout.rack_slots["x3001"]) == 14
+
+
+def test_polaris_takes_precedence_over_aurora_when_majority():
+    """Mixed snapshot: Polaris majority should win even with some Aurora names."""
+    names = [f"x3001c0s{i}b0n0" for i in range(14)] + [f"x4702-b{i:02d}" for i in range(2)]
+    layout = detect_layout(names)
+    assert layout.name == "polaris"
 
 
 def test_generic_caps_rack_rows_at_sixteen():
