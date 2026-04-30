@@ -25,6 +25,7 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from rich.text import Text
+from textual.widgets import Static
 
 from .cluster_grid import Palette  # re-use job-color palette
 from .data import Node, SchedulerSnapshot
@@ -40,6 +41,8 @@ __all__ = [
     "build_render_model",
     "CELL_GLYPHS",
     "render_to_text",
+    "build_legend_text",
+    "build_header_text",
 ]
 
 
@@ -318,3 +321,51 @@ def render_to_text(
         if r < model.height - 1:
             out.append("\n")
     return out
+
+
+# ---------------------------------------------------------------------------
+# Header and legend widgets
+# ---------------------------------------------------------------------------
+
+class _RackHeader(Static):
+    """One-line header summarising the cluster: machine name + counts."""
+
+
+class _RackLegend(Static):
+    """One-line legend mapping glyphs to states."""
+
+
+def build_legend_text() -> Text:
+    legend = Text()
+    legend.append(CELL_GLYPHS[CellState.FREE], style="dim")
+    legend.append(" free  ")
+    legend.append(CELL_GLYPHS[CellState.DOWN], style="dim")
+    legend.append(" down  ")
+    legend.append(CELL_GLYPHS[CellState.UNKNOWN], style="dim")
+    legend.append(" unknown  ")
+    legend.append(CELL_GLYPHS[CellState.RESERVATION], style="dim")
+    legend.append(" reservation  ")
+    legend.append("█", style="bold")
+    legend.append(" job (click to select)")
+    return legend
+
+
+def build_header_text(layout: MachineLayout, snapshot: SchedulerSnapshot,
+                      assignments: Dict[str, List[str]]) -> Text:
+    total = len(snapshot.nodes)
+    free = sum(1 for n in snapshot.nodes if n.primary_state() == "free")
+    down = sum(1 for n in snapshot.nodes if n.primary_state() in {"offline", "down"})
+    running_node_count = sum(len(v) for v in assignments.values())
+    header = Text()
+    header.append(layout.name.title(), style="bold")
+    header.append("  ")
+    header.append(f"{total:,}", style="bold")
+    header.append(" nodes  ")
+    header.append(f"{running_node_count:,}", style="bold cyan")
+    header.append(" running  ")
+    header.append(f"{free:,}", style="bold green")
+    header.append(" free  ")
+    if down:
+        header.append(f"{down:,}", style="bold red")
+        header.append(" down")
+    return header
