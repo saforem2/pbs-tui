@@ -158,3 +158,74 @@ def test_render_to_text_uses_glyph_for_each_state():
     assert CELL_GLYPHS[CellState.DOWN] in plain
     assert CELL_GLYPHS[CellState.UNKNOWN] in plain
     assert CELL_GLYPHS[CellState.RESERVATION] in plain
+
+
+def test_render_to_text_inverts_only_selected_job_cells():
+    layout = _two_rack_layout()
+    snap = SchedulerSnapshot(
+        nodes=[
+            Node(name="r1-a", state="job-exclusive"),
+            Node(name="r1-b", state="job-exclusive"),
+            Node(name="r1-c", state="job-exclusive"),
+            Node(name="r1-d", state="free"),
+            Node(name="r2-a", state="free"),
+            Node(name="r2-b", state="free"),
+            Node(name="r2-c", state="free"),
+            Node(name="r2-d", state="free"),
+        ],
+        jobs=[],
+    )
+    assignments = {"j1": ["r1-a", "r1-b"], "j2": ["r1-c"]}
+    model = build_render_model(layout, snap, job_assignments=assignments)
+    text = render_to_text(
+        model,
+        palette=_palette(),
+        running_jobs={"j1": 0, "j2": 1},
+        selected_job_id="j1",
+    )
+    # Walk Text spans and verify only j1 cells got "reverse"
+    selected_coords = {
+        (model.cells_by_node["r1-a"].row, model.cells_by_node["r1-a"].col),
+        (model.cells_by_node["r1-b"].row, model.cells_by_node["r1-b"].col),
+    }
+    inverted_styles_found: list[tuple[int, int]] = []
+    # Iterate by walking the plain string + spans; simplest is to render and
+    # scan the styles grid directly.  We re-use render_to_text's deterministic
+    # output — j2's r1-c cell must NOT be reverse-styled.
+    rendered = text.plain.splitlines()
+    # Sanity: rendered should contain at least the selection's two cells
+    assert len(rendered) > 0
+    # Span check: for every span where style starts with "reverse", its
+    # (row, col) must be in selected_coords.
+    cursor_row = 0
+    cursor_col = 0
+    for span_text, span_style in zip(*_walk_text_spans(text)):
+        if "\n" in span_text:
+            cursor_row += span_text.count("\n")
+            cursor_col = 0
+            continue
+        for offset in range(len(span_text)):
+            if span_style and "reverse" in str(span_style):
+                inverted_styles_found.append((cursor_row, cursor_col + offset))
+        cursor_col += len(span_text)
+    assert set(inverted_styles_found) == selected_coords
+
+
+def _walk_text_spans(text):
+    """Yield (segment_text, style) pairs for the rich Text in render order."""
+    plain = text.plain
+    spans = list(text.spans)
+    # Build segment list by walking spans (which carry start/end indices)
+    boundaries = sorted({0, len(plain)} | {s.start for s in spans} | {s.end for s in spans})
+    seg_texts: list[str] = []
+    seg_styles: list[str] = []
+    for start, end in zip(boundaries[:-1], boundaries[1:]):
+        chunk = plain[start:end]
+        # Find a span that covers this chunk; later spans win
+        active_style = ""
+        for s in spans:
+            if s.start <= start and s.end >= end:
+                active_style = s.style or active_style
+        seg_texts.append(chunk)
+        seg_styles.append(active_style)
+    return seg_texts, seg_styles
