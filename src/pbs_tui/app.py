@@ -1046,9 +1046,25 @@ def run(
         metavar="SECONDS",
         help="How often the TUI refreshes PBS data (default: 30).",
     )
+    parser.add_argument(
+        "--dummy",
+        "--fake",
+        "--sample",
+        dest="dummy",
+        action="store_true",
+        help=(
+            "Use bundled sample data instead of querying PBS "
+            "(equivalent to setting PBS_TUI_SAMPLE_DATA=1)."
+        ),
+    )
     args = parser.parse_args(argv)
 
-    fetcher_instance = fetcher or PBSDataFetcher()
+    if fetcher is not None:
+        fetcher_instance = fetcher
+    elif args.dummy:
+        fetcher_instance = PBSDataFetcher(force_sample=True)
+    else:
+        fetcher_instance = PBSDataFetcher()
 
     if args.file and not args.inline:
         parser.error("--file can only be used together with --inline")

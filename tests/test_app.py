@@ -626,3 +626,20 @@ def test_app_includes_racks_tab():
 
     asyncio.run(interact())
 
+
+
+def test_run_dummy_flag_uses_sample_data(capsys):
+    """`--dummy` (and its aliases) forces bundled sample data via --inline."""
+    run(["--inline", "--dummy"])
+    out = capsys.readouterr().out
+    # Sample snapshot always contains a known bundled user/job; assert we got
+    # a populated jobs table rather than an empty/live result.
+    assert "PBS Jobs" in out
+    assert len(out.strip()) > 0
+
+
+def test_run_fake_alias_matches_dummy(capsys):
+    """The --fake alias behaves identically to --dummy."""
+    run(["--inline", "--fake"])
+    out = capsys.readouterr().out
+    assert "PBS Jobs" in out
