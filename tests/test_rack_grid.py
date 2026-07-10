@@ -357,3 +357,208 @@ def test_build_job_list_entries_filter_by_rack():
     entries = build_job_list_entries(snap, assignments, palette_index=palette_index,
                                      rack_filter="r1")
     assert [e.job_id for e in entries] == ["j1"]
+
+
+# ---------------------------------------------------------------------------
+# Job-list scrolling (right sidebar in the Racks tab)
+# ---------------------------------------------------------------------------
+
+
+def _many_entries(count: int) -> list:
+    """Build *count* JobListEntry rows for driving the sidebar widget."""
+    return [
+        JobListEntry(
+            job_id=f"j{i}",
+            user=f"user{i}",
+            queue="preemptable",
+            node_count=1,
+            palette_index=i,
+            time_remaining_str="63h48m",
+            nodes=[f"x{i}"],
+        )
+        for i in range(count)
+    ]
+
+
+def test_job_list_scrolls_when_entries_overflow_viewport():
+    """The sidebar must expose vertical scrolling when the running-job list is
+    taller than its viewport — otherwise off-screen jobs are unreachable.
+
+    Regression test: previously ``_JobListWidget`` subclassed a bare ``Widget``
+    and rendered its own ``Text``, so Textual clamped its virtual size to the
+    viewport and ``max_scroll_y`` stayed 0.
+    """
+    import asyncio
+
+    from textual.app import App, ComposeResult
+    from textual.containers import Horizontal
+
+    from pbs_tui.rack_grid import _JobListWidget
+
+    palette = _palette_many(50)
+    entries = _many_entries(50)
+
+    class Probe(App):
+        def compose(self) -> ComposeResult:
+            with Horizontal():
+                yield _JobListWidget(id="jl")
+
+    async def interact() -> None:
+        app = Probe()
+        async with app.run_test(size=(80, 24)) as pilot:
+            widget = app.query_one("#jl", _JobListWidget)
+            widget.update(entries, palette, selected_id=None, rack_filter=None)
+            widget.focus()
+            await pilot.pause()
+
+            assert widget.is_scrollable, "job list should be scrollable"
+            assert widget.max_scroll_y > 0, (
+                f"expected positive max_scroll_y, got {widget.max_scroll_y}; "
+                f"virtual height={widget.virtual_size.height}"
+            )
+
+            widget.scroll_end(animate=False)
+            await pilot.pause()
+            assert widget.scroll_offset.y > 0, "scroll_end should move the viewport"
+
+    asyncio.run(interact())
+
+
+def _palette_many(n: int) -> "Palette":
+    return Palette(
+        job_styles=[f"on color({16 + (i % 200)})" for i in range(max(1, n))],
+        agg_colors=["#445566"],
+        empty_style="on color(236)",
+    )
+
+
+def test_job_list_click_selects_correct_job_when_scrolled():
+    """Clicking a row after scrolling must select that row's job, not the row
+    that happens to sit at the same viewport offset.
+
+    Regression test: the old handler mapped ``event.y`` directly to an entry
+    index, which selected the wrong job once the list was scrolled.
+    """
+    import asyncio
+
+    from textual.app import App, ComposeResult
+    from textual.containers import Horizontal
+
+    from pbs_tui.rack_grid import _JobListWidget, _JobRow
+
+    palette = _palette_many(50)
+    entries = _many_entries(50)
+    chosen: list = []
+
+    class Probe(App):
+        def compose(self) -> ComposeResult:
+            with Horizontal():
+                yield _JobListWidget(id="jl")
+
+        def on__job_list_widget_job_chosen(self, event) -> None:
+            chosen.append(event.job_id)
+
+    async def interact() -> None:
+        app = Probe()
+        async with app.run_test(size=(80, 24)) as pilot:
+            widget = app.query_one("#jl", _JobListWidget)
+            widget.update(entries, palette, selected_id=None, rack_filter=None)
+            widget.focus()
+            await pilot.pause()
+
+            # Scroll well down the list, then click a row that is now on screen.
+            widget.scroll_to(y=30, animate=False)
+            await pilot.pause()
+
+            # Find a row widget that is actually visible in the viewport and
+            # click it; its job_id must be what gets chosen.
+            target = None
+            for row in widget.query(_JobRow):
+                if widget.scrollable_content_region.contains_region(row.region):
+                    target = row
+                    break
+            assert target is not None, "expected a visible row after scrolling"
+            expected_job = target.job_id
+            await pilot.click(target)
+            await pilot.pause()
+
+            assert chosen == [expected_job], (
+                f"clicked row {expected_job!r} but chose {chosen!r}"
+            )
+
+    asyncio.run(interact())
+
+
+def test_job_list_cursor_scrolls_into_view_on_arrow_navigation():
+    """Moving the cursor with arrow keys past the viewport edge must scroll the
+    list so the cursor stays visible."""
+    import asyncio
+
+    from textual.app import App, ComposeResult
+    from textual.containers import Horizontal
+
+    from pbs_tui.rack_grid import _JobListWidget
+
+    palette = _palette_many(50)
+    entries = _many_entries(50)
+
+    class Probe(App):
+        def compose(self) -> ComposeResult:
+            with Horizontal():
+                yield _JobListWidget(id="jl")
+
+    async def interact() -> None:
+        app = Probe()
+        async with app.run_test(size=(80, 24)) as pilot:
+            widget = app.query_one("#jl", _JobListWidget)
+            widget.update(entries, palette, selected_id=None, rack_filter=None)
+            widget.focus()
+            await pilot.pause()
+
+            assert widget.scroll_offset.y == 0
+            # Press up once: cursor wraps to the last entry, which is off-screen,
+            # so the list must scroll down to reveal it.
+            await pilot.press("up")
+            await pilot.pause()
+            assert widget.scroll_offset.y > 0, (
+                "cursor moved to the bottom entry but the list did not scroll"
+            )
+
+    asyncio.run(interact())
+
+
+def test_job_list_filter_chip_click_clears_filter():
+    """Clicking the filter chip in the header emits FilterCleared."""
+    import asyncio
+
+    from textual.app import App, ComposeResult
+    from textual.containers import Horizontal
+
+    from pbs_tui.rack_grid import _JobListWidget, _JobListFilterChip
+
+    palette = _palette_many(5)
+    entries = _many_entries(5)
+    cleared: list = []
+
+    class Probe(App):
+        def compose(self) -> ComposeResult:
+            with Horizontal():
+                yield _JobListWidget(id="jl")
+
+        def on__job_list_widget_filter_cleared(self, event) -> None:
+            cleared.append(True)
+
+    async def interact() -> None:
+        app = Probe()
+        async with app.run_test(size=(80, 24)) as pilot:
+            widget = app.query_one("#jl", _JobListWidget)
+            widget.update(entries, palette, selected_id=None, rack_filter="r1")
+            widget.focus()
+            await pilot.pause()
+
+            chip = app.query_one(_JobListFilterChip)
+            await pilot.click(chip)
+            await pilot.pause()
+            assert cleared, "clicking the filter chip should clear the filter"
+
+    asyncio.run(interact())
