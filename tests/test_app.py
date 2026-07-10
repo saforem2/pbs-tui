@@ -628,18 +628,38 @@ def test_app_includes_racks_tab():
 
 
 
-def test_run_dummy_flag_uses_sample_data(capsys):
-    """`--dummy` (and its aliases) forces bundled sample data via --inline."""
-    run(["--inline", "--dummy"])
-    out = capsys.readouterr().out
-    # Sample snapshot always contains a known bundled user/job; assert we got
-    # a populated jobs table rather than an empty/live result.
-    assert "PBS Jobs" in out
-    assert len(out.strip()) > 0
+class _ProbeFetcher:
+    """Records the force_sample kwarg it was constructed with and returns a
+    sample snapshot so the --inline path completes without a live PBS."""
+
+    constructed_with: "list[bool]" = []
+
+    def __init__(self, *args, force_sample=None, **kwargs):
+        type(self).constructed_with.append(bool(force_sample))
+
+    async def fetch_snapshot(self):
+        return sample_snapshot()
 
 
-def test_run_fake_alias_matches_dummy(capsys):
-    """The --fake alias behaves identically to --dummy."""
-    run(["--inline", "--fake"])
-    out = capsys.readouterr().out
-    assert "PBS Jobs" in out
+@pytest.mark.parametrize("flag", ["--dummy", "--fake", "--sample"])
+def test_run_sample_flags_force_sample_data(flag, monkeypatch):
+    """Each sample-data alias must construct the fetcher with force_sample=True.
+
+    Asserting on stdout alone is a false positive: a machine without PBS falls
+    back to sample data even without the flag. Patch PBSDataFetcher and verify
+    the flag actually wires through to force_sample=True.
+    """
+    _ProbeFetcher.constructed_with = []
+    monkeypatch.setattr("pbs_tui.app.PBSDataFetcher", _ProbeFetcher)
+    run(["--inline", flag])
+    assert _ProbeFetcher.constructed_with == [True], (
+        f"{flag} should construct PBSDataFetcher(force_sample=True)"
+    )
+
+
+def test_run_without_sample_flag_does_not_force_sample(monkeypatch):
+    """Without a sample-data flag the fetcher is built normally (no forcing)."""
+    _ProbeFetcher.constructed_with = []
+    monkeypatch.setattr("pbs_tui.app.PBSDataFetcher", _ProbeFetcher)
+    run(["--inline"])
+    assert _ProbeFetcher.constructed_with == [False]

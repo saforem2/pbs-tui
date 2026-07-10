@@ -710,6 +710,9 @@ class _JobListWidget(VerticalScroll):
         self._palette: Optional[Palette] = None
         self._selected_id: Optional[str] = None
         self._rack_filter: Optional[str] = None
+        # Row widgets indexed by entry position, so repaint/scroll are O(1)
+        # instead of scanning the DOM on every keypress.
+        self._rows: List[_JobRow] = []
 
     def on_mount(self) -> None:
         # The parent may call update() before this widget is mounted (during its
@@ -731,6 +734,7 @@ class _JobListWidget(VerticalScroll):
         if not self.is_mounted:
             return
         self.remove_children()
+        self._rows = []
         widgets: List[Widget] = []
         if self._rack_filter:
             chip = Text()
@@ -747,6 +751,7 @@ class _JobListWidget(VerticalScroll):
             for i, entry in enumerate(self._entries):
                 row = _JobRow(i, entry.job_id)
                 row.update(self._render_row(i, entry))
+                self._rows.append(row)
                 widgets.append(row)
         self.mount_all(widgets)
 
@@ -762,19 +767,13 @@ class _JobListWidget(VerticalScroll):
 
     def _refresh_row(self, index: int) -> None:
         """Re-render a single row's content in place (cheap cursor repaint)."""
-        if not (0 <= index < len(self._entries)) or self._palette is None:
+        if self._palette is None or not (0 <= index < len(self._rows)):
             return
-        rows = self.query(_JobRow)
-        for row in rows:
-            if row.index == index:
-                row.update(self._render_row(index, self._entries[index]))
-                return
+        self._rows[index].update(self._render_row(index, self._entries[index]))
 
     def _scroll_cursor_into_view(self) -> None:
-        for row in self.query(_JobRow):
-            if row.index == self._cursor:
-                self.scroll_to_widget(row, animate=False)
-                return
+        if 0 <= self._cursor < len(self._rows):
+            self.scroll_to_widget(self._rows[self._cursor], animate=False)
 
     def action_move(self, delta: int) -> None:
         if not self._entries:
