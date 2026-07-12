@@ -562,3 +562,109 @@ def test_job_list_filter_chip_click_clears_filter():
             assert cleared, "clicking the filter chip should clear the filter"
 
     asyncio.run(interact())
+
+
+# ---------------------------------------------------------------------------
+# Rack panel click mapping under scroll (left grid pane)
+# ---------------------------------------------------------------------------
+
+
+def _overflowing_layout(rack_rows: int, rack_cols: int) -> MachineLayout:
+    """A machine layout whose rendered grid overflows a small viewport on both
+    axes: *rack_rows* × *rack_cols* racks, each a 3×2 mini-grid."""
+    specs = {}
+    rows = []
+    slots = {}
+    for r in range(rack_rows):
+        row = []
+        for c in range(rack_cols):
+            name = f"R{r}_{c}"
+            specs[name] = RackSpec(name=name, rows=3, cols=2)
+            slots[name] = [f"{name}s{i}" for i in range(6)]
+            row.append(name)
+        rows.append(row)
+    return MachineLayout(name="t", rack_specs=specs, rack_rows=rows, rack_slots=slots)
+
+
+def test_rack_panel_click_selects_correct_cell_under_scroll():
+    """Clicking a node glyph must select that node in every scroll state.
+
+    Regression test: `_RackPanel.on_click` added `scroll_offset` to the click
+    coordinates, but Textual already delivers `event.x`/`event.y` in the inner
+    Static's content space (scroll applied). Adding the offset double-counted,
+    so clicks selected the wrong cell — or None — once the panel was scrolled.
+    """
+    import asyncio
+
+    from textual.app import App, ComposeResult
+    from textual.containers import Horizontal
+
+    from pbs_tui.rack_grid import _RackPanel, render_to_text
+
+    layout = _overflowing_layout(rack_rows=8, rack_cols=10)
+    snap = SchedulerSnapshot(
+        nodes=[
+            Node(name=n, state="job-exclusive")
+            for lst in layout.rack_slots.values()
+            for n in lst
+        ],
+        jobs=[],
+        timestamp=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    )
+    model = build_render_model(layout, snap, job_assignments={})
+    palette = _palette()
+    captured: list = []
+
+    class Probe(App):
+        def compose(self) -> ComposeResult:
+            with Horizontal():
+                yield _RackPanel(id="rp")
+
+        def on__rack_panel_cell_clicked(self, event) -> None:
+            captured.append(event.node_name)
+
+    async def interact() -> None:
+        app = Probe()
+        async with app.run_test(size=(50, 18)) as pilot:
+            panel = app.query_one("#rp", _RackPanel)
+            text = render_to_text(
+                model, palette=palette, running_jobs={}, selected_job_id=None
+            )
+            panel.update(text, model)
+            panel.focus()
+            await pilot.pause()
+            inner = panel.query_one("#rack_panel_inner")
+
+            def first_visible_target():
+                """A node whose glyph is on-screen and away from the left edge,
+                so a mis-mapped click lands on a *different* identifiable node."""
+                for name, cell in model.cells_by_node.items():
+                    sx = inner.region.offset.x + cell.col
+                    sy = inner.region.offset.y + cell.row
+                    if (
+                        panel.content_region.contains(sx, sy)
+                        and sx > panel.content_region.x + 1
+                    ):
+                        return name, sx, sy
+                return None
+
+            for label, (sox, soy) in [
+                ("unscrolled", (0, 0)),
+                ("v-scroll", (0, 8)),
+                ("h-scroll", (8, 0)),
+                ("both", (8, 8)),
+            ]:
+                panel.scroll_to(x=sox, y=soy, animate=False)
+                await pilot.pause()
+                target = first_visible_target()
+                assert target is not None, f"no visible target for {label}"
+                name, sx, sy = target
+                captured.clear()
+                await pilot.click("#rp", offset=(sx, sy))
+                await pilot.pause()
+                assert captured == [name], (
+                    f"{label} (scroll {sox},{soy}): clicked glyph of {name!r} "
+                    f"but panel reported {captured!r}"
+                )
+
+    asyncio.run(interact())
