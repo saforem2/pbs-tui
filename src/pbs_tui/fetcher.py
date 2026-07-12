@@ -251,7 +251,8 @@ class PBSDataFetcher:
             snapshot = sample_snapshot()
             snapshot.errors.insert(
                 0,
-                "Using bundled sample data because PBS_TUI_SAMPLE_DATA was set.",
+                "Using bundled sample data "
+                "(--dummy/--fake/--sample or PBS_TUI_SAMPLE_DATA).",
             )
             return snapshot
 

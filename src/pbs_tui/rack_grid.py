@@ -24,9 +24,13 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from rich.console import RenderableType
 from rich.text import Text
-from textual.containers import Horizontal, ScrollableContainer, Vertical
+from textual.containers import (
+    Horizontal,
+    ScrollableContainer,
+    Vertical,
+    VerticalScroll,
+)
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Static
@@ -613,8 +617,56 @@ class _RackPanel(ScrollableContainer):
             self.post_message(self.CellClicked(node_name=None, rack_name=rack_name))
 
 
-class _JobListWidget(Widget):
-    """Sidebar listing running jobs; emits JobChosen on selection."""
+class _JobRow(Static):
+    """A single clickable job entry inside the sidebar list.
+
+    One widget per entry means Textual routes clicks straight to the right row
+    regardless of scroll position or line-wrapping, and the cursor can be
+    scrolled into view with ``scroll_to_widget`` — no manual coordinate math.
+    """
+
+    DEFAULT_CSS = """
+    _JobRow {
+        width: 1fr;
+        height: auto;
+    }
+    """
+
+    def __init__(self, index: int, job_id: str, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.index = index
+        self.job_id = job_id
+
+    def on_click(self, event) -> None:
+        # Stop the click bubbling to the container's filter-chip handler.
+        event.stop()
+        self.post_message(_JobListWidget.RowClicked(self.index))
+
+
+class _JobListFilterChip(Static):
+    """Header chip shown when a rack filter is active; clicking it clears."""
+
+    DEFAULT_CSS = """
+    _JobListFilterChip {
+        width: 1fr;
+        height: auto;
+        margin-bottom: 1;
+    }
+    """
+
+    def on_click(self, event) -> None:
+        event.stop()
+        self.post_message(_JobListWidget.FilterCleared())
+
+
+class _JobListWidget(VerticalScroll):
+    """Scrollable sidebar listing running jobs; emits JobChosen on selection.
+
+    Implemented as a :class:`VerticalScroll` holding one :class:`_JobRow` child
+    per entry (plus an optional filter chip).  This makes the list scroll when
+    it overflows the viewport — a plain ``Widget`` that renders its own ``Text``
+    is clamped to the viewport height and never scrolls.
+    """
 
     DEFAULT_CSS = """
     _JobListWidget {
@@ -646,6 +698,11 @@ class _JobListWidget(Widget):
     class FilterCleared(Message):
         pass
 
+    class RowClicked(Message):
+        def __init__(self, index: int) -> None:
+            super().__init__()
+            self.index = index
+
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._entries: List[JobListEntry] = []
@@ -653,10 +710,14 @@ class _JobListWidget(Widget):
         self._palette: Optional[Palette] = None
         self._selected_id: Optional[str] = None
         self._rack_filter: Optional[str] = None
-        self._content: RenderableType = Text()
+        # Row widgets indexed by entry position, so repaint/scroll are O(1)
+        # instead of scanning the DOM on every keypress.
+        self._rows: List[_JobRow] = []
 
-    def render(self) -> RenderableType:
-        return self._content
+    def on_mount(self) -> None:
+        # The parent may call update() before this widget is mounted (during its
+        # own compose/rebuild). Render whatever state we captured once mounted.
+        self._rebuild_children()
 
     def update(self, entries: List[JobListEntry], palette: Palette,
                selected_id: Optional[str], rack_filter: Optional[str]) -> None:
@@ -665,41 +726,64 @@ class _JobListWidget(Widget):
         self._selected_id = selected_id
         self._rack_filter = rack_filter
         self._cursor = max(0, min(self._cursor, len(entries) - 1))
-        self._rebuild_content()
-        self.refresh()
+        self._rebuild_children()
 
-    def _rebuild_content(self) -> None:
-        text = Text()
+    def _rebuild_children(self) -> None:
+        # Only reconcile once mounted; before mount there is no place to put
+        # children (update() may be called by the parent during its own build).
+        if not self.is_mounted:
+            return
+        self.remove_children()
+        self._rows = []
+        widgets: List[Widget] = []
         if self._rack_filter:
-            text.append("Filtered: ", style="dim")
-            text.append(self._rack_filter, style="bold")
-            text.append(f"  ({len(self._entries)} jobs)\n", style="dim")
-            text.append("[clear: esc or click chip]\n\n", style="dim")
+            chip = Text()
+            chip.append("Filtered: ", style="dim")
+            chip.append(self._rack_filter, style="bold")
+            chip.append(f"  ({len(self._entries)} jobs)\n", style="dim")
+            chip.append("[clear: esc or click chip]", style="dim")
+            widgets.append(_JobListFilterChip(chip))
         if not self._entries:
-            text.append("(no running jobs)", style="dim")
-            self._content = text
+            widgets.append(Static(Text("(no running jobs)", style="dim")))
+        elif self._palette is None:
+            widgets.append(Static(Text("(loading…)", style="dim")))
+        else:
+            for i, entry in enumerate(self._entries):
+                row = _JobRow(i, entry.job_id)
+                row.update(self._render_row(i, entry))
+                self._rows.append(row)
+                widgets.append(row)
+        self.mount_all(widgets)
+
+    def _render_row(self, index: int, entry: JobListEntry) -> Text:
+        assert self._palette is not None
+        prefix = "▶ " if index == self._cursor else "  "
+        text = Text(prefix)
+        text.append_text(render_job_list_entry(
+            entry, self._palette,
+            selected=(self._selected_id == entry.job_id),
+        ))
+        return text
+
+    def _refresh_row(self, index: int) -> None:
+        """Re-render a single row's content in place (cheap cursor repaint)."""
+        if self._palette is None or not (0 <= index < len(self._rows)):
             return
-        if self._palette is None:
-            # No palette yet — render a placeholder until the parent calls update()
-            text.append("(loading…)", style="dim")
-            self._content = text
-            return
-        for i, entry in enumerate(self._entries):
-            prefix = "▶ " if i == self._cursor else "  "
-            text.append(prefix)
-            text.append_text(render_job_list_entry(
-                entry, self._palette,
-                selected=(self._selected_id == entry.job_id),
-            ))
-            text.append("\n")
-        self._content = text
+        self._rows[index].update(self._render_row(index, self._entries[index]))
+
+    def _scroll_cursor_into_view(self) -> None:
+        if 0 <= self._cursor < len(self._rows):
+            self.scroll_to_widget(self._rows[self._cursor], animate=False)
 
     def action_move(self, delta: int) -> None:
         if not self._entries:
             return
+        previous = self._cursor
         self._cursor = (self._cursor + delta) % len(self._entries)
-        self._rebuild_content()
-        self.refresh()
+        # Repaint only the two affected rows instead of rebuilding the list.
+        self._refresh_row(previous)
+        self._refresh_row(self._cursor)
+        self._scroll_cursor_into_view()
 
     def action_choose(self) -> None:
         if not self._entries:
@@ -710,21 +794,16 @@ class _JobListWidget(Widget):
     def action_clear(self) -> None:
         self.post_message(self.FilterCleared())
 
-    def on_click(self, event) -> None:
-        # When a rack filter is active the header occupies 3 lines (chip line 0,
-        # chip line 1, blank line 2).  Clicking anywhere in that header area
-        # (y < 3) clears the filter — the chip text says "esc or click chip".
-        if self._rack_filter and int(event.y) < 3:
-            self.post_message(self.FilterCleared())
+    def on__job_list_widget_row_clicked(self, event: "RowClicked") -> None:
+        event.stop()
+        index = event.index
+        if not (0 <= index < len(self._entries)):
             return
-        # Map click row to an entry index. Header takes 0-2 lines depending on filter.
-        offset = 3 if self._rack_filter else 0
-        row = int(event.y) - offset
-        if 0 <= row < len(self._entries):
-            self._cursor = row
-            self._rebuild_content()
-            self.refresh()
-            self.post_message(self.JobChosen(self._entries[row].job_id))
+        previous = self._cursor
+        self._cursor = index
+        self._refresh_row(previous)
+        self._refresh_row(index)
+        self.post_message(self.JobChosen(self._entries[index].job_id))
 
 
 # ---------------------------------------------------------------------------

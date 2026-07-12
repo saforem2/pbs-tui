@@ -85,7 +85,7 @@ track workload health in real time.
   The `ansi-*` variants use muted 256-color palette tones that blend with your terminal
   colorscheme. Switch via the command palette (`Ctrl+P`).
 - **Fallback sample data** – bundled realistic mock cluster (~560 nodes, ~40 jobs) for demoing
-  without a production scheduler (`PBS_TUI_SAMPLE_DATA=1`).
+  without a production scheduler (`pbs-tui --dummy`, or `PBS_TUI_SAMPLE_DATA=1`).
 - **Inline snapshot** – render the current queue as a Rich table with `pbs-tui --inline` and
   optionally write a Markdown summary alongside it.
 
@@ -138,9 +138,10 @@ Use tab and the arrow keys/`PageUp`/`PageDown` to move through rows once a table
 
 ### Sample mode
 
-If you want to explore the UI without a live PBS cluster, export `PBS_TUI_SAMPLE_DATA=1`
-(or pass `force_sample=True` to `PBSDataFetcher`). The application will display bundled example
-jobs, nodes, and queues along with a warning banner indicating that the data is synthetic.
+If you want to explore the UI without a live PBS cluster, run `pbs-tui --dummy` (aliases:
+`--fake`, `--sample`), export `PBS_TUI_SAMPLE_DATA=1`, or pass `force_sample=True` to
+`PBSDataFetcher`. The application will display bundled example jobs, nodes, and queues along
+with a warning banner indicating that the data is synthetic.
 
 ### Headless / automated runs
 
