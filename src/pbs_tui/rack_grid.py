@@ -596,10 +596,13 @@ class _RackPanel(ScrollableContainer):
     def on_click(self, event) -> None:
         if self._model is None:
             return
-        # event.x / event.y are container-local; add scroll offsets to map
-        # back to the underlying RenderModel's absolute coordinates.
-        col = int(event.x) + int(self.scroll_offset.x)
-        row = int(event.y) + int(self.scroll_offset.y)
+        # event.x / event.y are already in the inner Static's content space:
+        # Textual applies this scroll container's offset to the child's region
+        # before delivering the click, so they map directly to RenderModel
+        # (row, col). Adding scroll_offset here would double-count and select
+        # the wrong cell once the panel is scrolled.
+        col = int(event.x)
+        row = int(event.y)
         node_name = self._model.cell_at(row, col)
         if node_name is not None:
             # Look up the owner directly from the pre-computed cell data.
